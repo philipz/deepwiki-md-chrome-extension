@@ -1,7 +1,10 @@
 importScripts('lib/jszip.min.js');
+importScripts('utils.js');
 
 const MESSAGE_TIMEOUT = 30000;
 const messageQueue = {};
+
+// Utility functions (sanitizeName and isValidDeepWikiUrl) are now loaded from utils.js
 
 const createInitialBatchState = () => ({
   isRunning: false,
@@ -314,6 +317,45 @@ async function createZipArchive() {
   });
 }
 
+async function createSingleMarkdownFile(fileName) {
+  // Merge all converted pages into a single Markdown file
+  let combinedMarkdown = '';
+
+  batchState.convertedPages.forEach((page, index) => {
+    // Add page title as a heading
+    combinedMarkdown += `# ${page.title}\n\n`;
+    // Add page content
+    combinedMarkdown += page.content;
+    // Add separator between pages (except for the last page)
+    if (index < batchState.convertedPages.length - 1) {
+      combinedMarkdown += '\n\n---\n\n';
+    }
+  });
+
+  // Create data URL for download
+  // Note: URL.createObjectURL() is not available in service workers,
+  // so we use base64 encoding instead. Using TextEncoder for proper UTF-8 handling.
+  const encoder = new TextEncoder();
+  const uint8Array = encoder.encode(combinedMarkdown);
+  const binaryString = Array.from(uint8Array, byte => String.fromCharCode(byte)).join('');
+  const base64Content = btoa(binaryString);
+  const dataUrl = `data:text/markdown;charset=utf-8;base64,${base64Content}`;
+
+  return new Promise((resolve, reject) => {
+    chrome.downloads.download({
+      url: dataUrl,
+      filename: fileName,
+      saveAs: true
+    }, (downloadId) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(downloadId);
+    });
+  });
+}
+
 async function runBatchProcessing() {
   try {
     for (const page of batchState.pages) {
@@ -367,6 +409,60 @@ async function runBatchProcessing() {
   }
 }
 
+async function runBatchSingleFileProcessing(fileName) {
+  try {
+    // Process all pages using the same logic as batch ZIP processing
+    for (const page of batchState.pages) {
+      if (batchState.cancelRequested) {
+        break;
+      }
+
+      try {
+        await processSinglePage(page);
+      } catch (error) {
+        batchState.failed += 1;
+        broadcastBatchUpdate('pageFailed', {
+          message: `Failed ${page.title}: ${error.message || error}`,
+          level: 'error'
+        });
+      }
+    }
+
+    if (batchState.cancelRequested) {
+      batchState.isRunning = false;
+      broadcastBatchUpdate('cancelled', {
+        message: `Batch cancelled. Success ${batchState.processed}, Failed ${batchState.failed}.`
+      }, false);
+      return;
+    }
+
+    if (!batchState.convertedPages.length) {
+      throw new Error('No pages were converted successfully.');
+    }
+
+    broadcastBatchUpdate('merging', {
+      message: `Merging ${batchState.convertedPages.length} pages into single file...`
+    });
+
+    await createSingleMarkdownFile(fileName);
+
+    batchState.isRunning = false;
+    broadcastBatchUpdate('completed', {
+      message: `File ready. Success ${batchState.processed}, Failed ${batchState.failed}.`,
+      level: 'success'
+    }, false);
+  } catch (error) {
+    batchState.isRunning = false;
+    broadcastBatchUpdate('error', {
+      message: error.message || 'Single-file batch conversion failed.',
+      level: 'error'
+    }, false);
+  } finally {
+    await restoreOriginalPage();
+    resetBatchState();
+  }
+}
+
 function sanitizeFolderName(value) {
   return sanitizeName(value, 'deepwiki');
 }
@@ -389,8 +485,8 @@ async function startBatchProcessing(tabId) {
   }
 
   const tab = await getTabById(tabId);
-  if (!tab.url || !tab.url.includes('deepwiki.com')) {
-    throw new Error('Please open a DeepWiki page before starting batch conversion.');
+  if (!isValidDeepWikiUrl(tab.url)) {
+    throw new Error('Please open a valid DeepWiki documentation page (e.g., https://deepwiki.com/org/project) before starting batch conversion.');
   }
 
   const extraction = await sendMessageToTab(tabId, { action: 'extractAllPages' });
@@ -427,6 +523,65 @@ async function startBatchProcessing(tabId) {
   return {
     total: batchState.total,
     folderName: batchState.folderName
+  };
+}
+
+async function startBatchSingleFileProcessing(tabId) {
+  if (batchState.isRunning) {
+    throw new Error('Batch conversion already running.');
+  }
+
+  const tab = await getTabById(tabId);
+  if (!isValidDeepWikiUrl(tab.url)) {
+    throw new Error('Please open a valid DeepWiki documentation page (e.g., https://deepwiki.com/org/project) before starting batch conversion.');
+  }
+
+  const extraction = await sendMessageToTab(tabId, { action: 'extractAllPages' });
+  if (!extraction || !extraction.success) {
+    throw new Error(extraction?.error || 'Failed to extract sidebar links.');
+  }
+
+  const pages = extraction.pages || [];
+  if (!pages.length) {
+    throw new Error('No child pages were detected on this document.');
+  }
+
+  // Extract org and project from URL and sanitize for safe filenames
+  const urlObj = new URL(tab.url);
+  const pathSegments = urlObj.pathname.split('/').filter(segment => segment.length > 0);
+  const org = sanitizeName(pathSegments[0] || 'org', 'org');
+  const project = sanitizeName(pathSegments[1] || 'project', 'project');
+  const lastIndexedDate = sanitizeName(extraction.lastIndexedDate || '', '');
+
+  // Generate sanitized filename: org-project-date.md
+  const fileName = lastIndexedDate
+    ? `${org}-${project}-${lastIndexedDate}.md`
+    : `${org}-${project}.md`;
+
+  batchState = {
+    isRunning: true,
+    tabId,
+    originalUrl: tab.url,
+    pages,
+    convertedPages: [],
+    folderName: fileName.replace('.md', ''),
+    processed: 0,
+    failed: 0,
+    cancelRequested: false,
+    total: pages.length,
+    currentTitle: '',
+    fileNames: new Set()
+  };
+
+  broadcastBatchUpdate('started', {
+    message: `Found ${batchState.total} pages. Starting single-file batch conversion...`
+  });
+
+  runBatchSingleFileProcessing(fileName);
+
+  return {
+    total: batchState.total,
+    fileName: fileName
   };
 }
 
@@ -467,6 +622,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     startBatchProcessing(tabId)
+      .then(result => sendResponse({ success: true, ...result }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === 'startBatchSingleFile') {
+    const tabId = request.tabId;
+    if (typeof tabId !== 'number') {
+      sendResponse({ success: false, error: 'Missing tabId for single-file batch start.' });
+      return;
+    }
+
+    startBatchSingleFileProcessing(tabId)
       .then(result => sendResponse({ success: true, ...result }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;

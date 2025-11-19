@@ -1,3 +1,6 @@
+// Debug flag to control verbose logging (set to false in production)
+const DEBUG_MODE = false;
+
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "convertToMarkdown") {
@@ -52,13 +55,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const headTitle = document.title || "";
       // Format head title: replace slashes and pipes with dashes
       const formattedHeadTitle = headTitle.replace(/[\/|]/g, '-').replace(/\s+/g, '-').replace('---','-');
-      
+
       // Get the base part of the current document path
       const baseUrl = window.location.origin;
-      
+
       // Get all links in the sidebar
       const sidebarLinks = Array.from(document.querySelectorAll('.border-r-border ul li a'));
-      
+
       // Extract link URLs and titles
       const pages = sidebarLinks.map(link => {
         return {
@@ -67,7 +70,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           selected: link.getAttribute('data-selected') === 'true'
         };
       });
-      
+
       // Get current page information for return
       const currentPageTitle =
         document
@@ -80,13 +83,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           ?.textContent?.trim() ||
         document.querySelector("h1")?.textContent?.trim() ||
         "Untitled";
-        
-      sendResponse({ 
-        success: true, 
-        pages: pages, 
+
+      // Extract "Last indexed" date
+      let lastIndexedDate = '';
+      // Search for all p elements and find the one containing "Last indexed"
+      const allParagraphs = document.querySelectorAll('p');
+      for (const p of allParagraphs) {
+        const text = p.textContent;
+        if (text.includes('Last indexed:')) {
+          const dateMatch = text.match(/Last indexed:\s*(\d{4}-\d{2}-\d{2})/);
+          if (dateMatch) {
+            lastIndexedDate = dateMatch[1].replace(/-/g, ''); // Format: 20251106
+            break;
+          }
+        }
+      }
+
+      sendResponse({
+        success: true,
+        pages: pages,
         currentTitle: currentPageTitle,
         baseUrl: baseUrl,
-        headTitle: formattedHeadTitle
+        headTitle: formattedHeadTitle,
+        lastIndexedDate: lastIndexedDate
       });
     } catch (error) {
       console.error("Error extracting page links:", error);
@@ -215,17 +234,69 @@ function convertFlowchartSvgToMermaidText(svgElement) {
     // 4. Process edges and assign to their lowest common ancestor cluster
     const edges = [];
     const edgeLabels = {};
-    svgElement.querySelectorAll('g.edgeLabel').forEach(labelEl => {
-        const text = labelEl.textContent?.trim();
+
+    // Try multiple selectors to find edge labels
+    const edgeLabelSelectors = [
+        'g.edgeLabel',
+        'g[class*="edgeLabel"]',
+        'g[class*="edge-label"]',
+        '.edgeLabel'
+    ];
+
+    const edgeLabelElements = new Set();
+    edgeLabelSelectors.forEach(selector => {
+        svgElement.querySelectorAll(selector).forEach(el => edgeLabelElements.add(el));
+    });
+
+    edgeLabelElements.forEach(labelEl => {
+        // Try multiple selectors to find the label text
+        let text = '';
+
+        // Try foreignObject approach (common in mermaid)
+        const foreignObj = labelEl.querySelector('foreignObject span, foreignObject div, foreignObject p');
+        if (foreignObj) {
+            text = foreignObj.textContent?.trim();
+        }
+
+        // Fallback to text element
+        if (!text) {
+            const textEl = labelEl.querySelector('text');
+            if (textEl) {
+                text = textEl.textContent?.trim();
+            }
+        }
+
+        // Try tspan element
+        if (!text) {
+            const tspanEl = labelEl.querySelector('tspan');
+            if (tspanEl) {
+                text = tspanEl.textContent?.trim();
+            }
+        }
+
+        // Last resort: use all text content
+        if (!text) {
+            text = labelEl.textContent?.trim();
+        }
+
         const bbox = labelEl.getBoundingClientRect();
+        const labelId = labelEl.id || `label_${Object.keys(edgeLabels).length}`;
+
         if(text) {
-             edgeLabels[labelEl.id] = {
+             edgeLabels[labelId] = {
                 text,
                 x: bbox.left + bbox.width / 2,
                 y: bbox.top + bbox.height / 2
             };
+            if (DEBUG_MODE) {
+                console.log(`Found edge label: "${text}" at (${bbox.left + bbox.width / 2}, ${bbox.top + bbox.height / 2})`);
+            }
         }
     });
+
+    if (DEBUG_MODE) {
+        console.log(`Total edge labels found: ${Object.keys(edgeLabels).length}`);
+    }
   
   svgElement.querySelectorAll('path.flowchart-link').forEach(path => {
         const pathId = path.id;
@@ -269,7 +340,9 @@ function convertFlowchartSvgToMermaidText(svgElement) {
         }
 
         if (!sourceNode || !targetNode) {
-            console.warn("Could not determine source/target for edge:", pathId);
+            if (DEBUG_MODE) {
+                console.debug("Could not determine source/target for edge:", pathId);
+            }
             return;
         }
 
@@ -277,25 +350,49 @@ function convertFlowchartSvgToMermaidText(svgElement) {
         try {
             const totalLength = path.getTotalLength();
             if (totalLength > 0) {
-                const midPoint = path.getPointAtLength(totalLength / 2);
+                const midPointSVG = path.getPointAtLength(totalLength / 2);
+
+                // Convert SVG coordinates to screen coordinates
+                const svg = svgElement;
+                const ctm = svg.getScreenCTM();
+                if (!ctm) {
+                    if (DEBUG_MODE) {
+                        console.warn("Could not get screen CTM for SVG");
+                    }
+                    return;
+                }
+
+                const midPointScreen = {
+                    x: midPointSVG.x * ctm.a + midPointSVG.y * ctm.c + ctm.e,
+                    y: midPointSVG.x * ctm.b + midPointSVG.y * ctm.d + ctm.f
+                };
+
         let closestLabel = null;
         let closestDist = Infinity;
                 for (const labelId in edgeLabels) {
                     const currentLabel = edgeLabels[labelId];
-                    const dist = Math.sqrt(Math.pow(currentLabel.x - midPoint.x, 2) + Math.pow(currentLabel.y - midPoint.y, 2));
+                    const dist = Math.sqrt(Math.pow(currentLabel.x - midPointScreen.x, 2) + Math.pow(currentLabel.y - midPointScreen.y, 2));
           if (dist < closestDist) {
             closestDist = dist;
                         closestLabel = currentLabel;
           }
         }
-                if (closestLabel && closestDist < 75) {
+                // Increased threshold to 200px for better label matching
+                if (closestLabel && closestDist < 200) {
           label = closestLabel.text;
-        }
+          if (DEBUG_MODE) {
+              console.log(`Matched label "${label}" to edge ${sourceNode.mermaidId} -> ${targetNode.mermaidId} (distance: ${closestDist.toFixed(2)}px)`);
+          }
+        } else if (closestLabel) {
+                    if (DEBUG_MODE) {
+                        console.debug(`Closest label "${closestLabel.text}" too far (${closestDist.toFixed(2)}px) from edge ${sourceNode.mermaidId} -> ${targetNode.mermaidId}`);
+                    }
+                }
       }
         } catch (e) {
             console.error("Error matching label for edge " + pathId, e);
         }
-        
+
         const labelPart = label ? `|"${label}"|` : "";
     const edgeText = `${sourceNode.mermaidId} -->${labelPart} ${targetNode.mermaidId}`;
     

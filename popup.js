@@ -1,6 +1,9 @@
+// Utility functions are now loaded from utils.js
+
 document.addEventListener('DOMContentLoaded', () => {
   const convertBtn = document.getElementById('convertBtn');
   const batchDownloadBtn = document.getElementById('batchDownloadBtn');
+  const batchSingleFileBtn = document.getElementById('batchSingleFileBtn');
   const cancelBtn = document.getElementById('cancelBtn');
   const status = document.getElementById('status');
 
@@ -16,8 +19,8 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-      if (!tab.url.includes('deepwiki.com')) {
-        showStatus('Please use this extension on a DeepWiki page', 'error');
+      if (!isValidDeepWikiUrl(tab.url)) {
+        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., https://deepwiki.com/org/project)', 'error');
         return;
       }
 
@@ -25,8 +28,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await chrome.tabs.sendMessage(tab.id, { action: 'convertToMarkdown' });
 
       if (response && response.success) {
-        const headTitle = response.headTitle || '';
-        const currentTitle = response.markdownTitle;
+        const headTitle = sanitizeName(response.headTitle || '', '');
+        const currentTitle = sanitizeName(response.markdownTitle, 'page');
         const fileName = headTitle
           ? `${headTitle}-${currentTitle}.md`
           : `${currentTitle}.md`;
@@ -53,8 +56,8 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-      if (!tab.url.includes('deepwiki.com')) {
-        showStatus('Please use this extension on a DeepWiki page', 'error');
+      if (!isValidDeepWikiUrl(tab.url)) {
+        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., https://deepwiki.com/org/project)', 'error');
         return;
       }
 
@@ -66,6 +69,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (!response || !response.success) {
         throw new Error(response?.error || 'Failed to start batch conversion.');
+      }
+    } catch (error) {
+      showStatus('An error occurred: ' + error.message, 'error');
+      showCancelButton(false);
+      disableBatchButton(false);
+    }
+  });
+
+  batchSingleFileBtn.addEventListener('click', async () => {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+      if (!isValidDeepWikiUrl(tab.url)) {
+        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., https://deepwiki.com/org/project)', 'error');
+        return;
+      }
+
+      showCancelButton(true);
+      disableBatchButton(true);
+      showStatus('Starting single-file batch conversion...', 'info');
+
+      const response = await chrome.runtime.sendMessage({ action: 'startBatchSingleFile', tabId: tab.id });
+
+      if (!response || !response.success) {
+        throw new Error(response?.error || 'Failed to start single-file batch conversion.');
       }
     } catch (error) {
       showStatus('An error occurred: ' + error.message, 'error');
@@ -120,6 +148,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function disableBatchButton(disable) {
     batchDownloadBtn.disabled = disable;
+    batchSingleFileBtn.disabled = disable;
   }
 
   function showStatus(message, type) {
