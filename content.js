@@ -333,7 +333,7 @@ function convertFlowchartSvgToMermaidText(svgElement) {
         }
 
         if (!sourceNode || !targetNode) {
-            console.warn("Could not determine source/target for edge:", pathId);
+            console.debug("Could not determine source/target for edge:", pathId);
             return;
         }
 
@@ -371,7 +371,7 @@ function convertFlowchartSvgToMermaidText(svgElement) {
           label = closestLabel.text;
           console.log(`Matched label "${label}" to edge ${sourceNode.mermaidId} -> ${targetNode.mermaidId} (distance: ${closestDist.toFixed(2)}px)`);
         } else if (closestLabel) {
-                    console.warn(`Closest label "${closestLabel.text}" too far (${closestDist.toFixed(2)}px) from edge ${sourceNode.mermaidId} -> ${targetNode.mermaidId}`);
+                    console.debug(`Closest label "${closestLabel.text}" too far (${closestDist.toFixed(2)}px) from edge ${sourceNode.mermaidId} -> ${targetNode.mermaidId}`);
                 }
       }
         } catch (e) {
