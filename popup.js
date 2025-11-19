@@ -17,6 +17,7 @@ function isValidDeepWikiUrl(url) {
 document.addEventListener('DOMContentLoaded', () => {
   const convertBtn = document.getElementById('convertBtn');
   const batchDownloadBtn = document.getElementById('batchDownloadBtn');
+  const batchSingleFileBtn = document.getElementById('batchSingleFileBtn');
   const cancelBtn = document.getElementById('cancelBtn');
   const status = document.getElementById('status');
 
@@ -90,6 +91,31 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  batchSingleFileBtn.addEventListener('click', async () => {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+      if (!isValidDeepWikiUrl(tab.url)) {
+        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., deepwiki.com/org/project)', 'error');
+        return;
+      }
+
+      showCancelButton(true);
+      disableBatchButton(true);
+      showStatus('Starting single-file batch conversion...', 'info');
+
+      const response = await chrome.runtime.sendMessage({ action: 'startBatchSingleFile', tabId: tab.id });
+
+      if (!response || !response.success) {
+        throw new Error(response?.error || 'Failed to start single-file batch conversion.');
+      }
+    } catch (error) {
+      showStatus('An error occurred: ' + error.message, 'error');
+      showCancelButton(false);
+      disableBatchButton(false);
+    }
+  });
+
   cancelBtn.addEventListener('click', async () => {
     try {
       const response = await chrome.runtime.sendMessage({ action: 'cancelBatch' });
@@ -136,6 +162,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function disableBatchButton(disable) {
     batchDownloadBtn.disabled = disable;
+    batchSingleFileBtn.disabled = disable;
   }
 
   function showStatus(message, type) {
