@@ -1,3 +1,19 @@
+// Validate that the URL has at least two path segments (e.g., /org/project)
+function isValidDeepWikiUrl(url) {
+  if (!url || !url.includes('deepwiki.com')) {
+    return false;
+  }
+
+  try {
+    const urlObj = new URL(url);
+    const pathSegments = urlObj.pathname.split('/').filter(segment => segment.length > 0);
+    // Require at least 2 path segments: /org/project
+    return pathSegments.length >= 2;
+  } catch (error) {
+    return false;
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const convertBtn = document.getElementById('convertBtn');
   const batchDownloadBtn = document.getElementById('batchDownloadBtn');
@@ -16,8 +32,8 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-      if (!tab.url.includes('deepwiki.com')) {
-        showStatus('Please use this extension on a DeepWiki page', 'error');
+      if (!isValidDeepWikiUrl(tab.url)) {
+        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., deepwiki.com/org/project)', 'error');
         return;
       }
 
@@ -53,8 +69,8 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-      if (!tab.url.includes('deepwiki.com')) {
-        showStatus('Please use this extension on a DeepWiki page', 'error');
+      if (!isValidDeepWikiUrl(tab.url)) {
+        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., deepwiki.com/org/project)', 'error');
         return;
       }
 

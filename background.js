@@ -3,6 +3,22 @@ importScripts('lib/jszip.min.js');
 const MESSAGE_TIMEOUT = 30000;
 const messageQueue = {};
 
+// Validate that the URL has at least two path segments (e.g., /org/project)
+function isValidDeepWikiUrl(url) {
+  if (!url || !url.includes('deepwiki.com')) {
+    return false;
+  }
+
+  try {
+    const urlObj = new URL(url);
+    const pathSegments = urlObj.pathname.split('/').filter(segment => segment.length > 0);
+    // Require at least 2 path segments: /org/project
+    return pathSegments.length >= 2;
+  } catch (error) {
+    return false;
+  }
+}
+
 const createInitialBatchState = () => ({
   isRunning: false,
   tabId: null,
@@ -389,8 +405,8 @@ async function startBatchProcessing(tabId) {
   }
 
   const tab = await getTabById(tabId);
-  if (!tab.url || !tab.url.includes('deepwiki.com')) {
-    throw new Error('Please open a DeepWiki page before starting batch conversion.');
+  if (!isValidDeepWikiUrl(tab.url)) {
+    throw new Error('Please open a valid DeepWiki documentation page (e.g., deepwiki.com/org/project) before starting batch conversion.');
   }
 
   const extraction = await sendMessageToTab(tabId, { action: 'extractAllPages' });
