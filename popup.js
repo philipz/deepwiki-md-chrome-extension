@@ -1,3 +1,13 @@
+// Utility function to sanitize filenames
+function sanitizeName(value, fallback = 'page') {
+  if (!value || typeof value !== 'string') return fallback;
+  return value
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    || fallback;
+
 // Validate that the URL has at least two path segments (e.g., /org/project)
 function isValidDeepWikiUrl(url) {
   if (!url || !url.includes('deepwiki.com')) {
@@ -42,8 +52,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await chrome.tabs.sendMessage(tab.id, { action: 'convertToMarkdown' });
 
       if (response && response.success) {
-        const headTitle = response.headTitle || '';
-        const currentTitle = response.markdownTitle;
+        const headTitle = sanitizeName(response.headTitle || '', '');
+        const currentTitle = sanitizeName(response.markdownTitle, 'page');
         const fileName = headTitle
           ? `${headTitle}-${currentTitle}.md`
           : `${currentTitle}.md`;
