@@ -7,11 +7,27 @@ function sanitizeName(value, fallback = 'page') {
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
     || fallback;
+
+// Validate that the URL has at least two path segments (e.g., /org/project)
+function isValidDeepWikiUrl(url) {
+  if (!url || !url.includes('deepwiki.com')) {
+    return false;
+  }
+
+  try {
+    const urlObj = new URL(url);
+    const pathSegments = urlObj.pathname.split('/').filter(segment => segment.length > 0);
+    // Require at least 2 path segments: /org/project
+    return pathSegments.length >= 2;
+  } catch (error) {
+    return false;
+  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
   const convertBtn = document.getElementById('convertBtn');
   const batchDownloadBtn = document.getElementById('batchDownloadBtn');
+  const batchSingleFileBtn = document.getElementById('batchSingleFileBtn');
   const cancelBtn = document.getElementById('cancelBtn');
   const status = document.getElementById('status');
 
@@ -27,8 +43,8 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-      if (!tab.url.includes('deepwiki.com')) {
-        showStatus('Please use this extension on a DeepWiki page', 'error');
+      if (!isValidDeepWikiUrl(tab.url)) {
+        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., deepwiki.com/org/project)', 'error');
         return;
       }
 
@@ -64,8 +80,8 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-      if (!tab.url.includes('deepwiki.com')) {
-        showStatus('Please use this extension on a DeepWiki page', 'error');
+      if (!isValidDeepWikiUrl(tab.url)) {
+        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., deepwiki.com/org/project)', 'error');
         return;
       }
 
@@ -77,6 +93,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (!response || !response.success) {
         throw new Error(response?.error || 'Failed to start batch conversion.');
+      }
+    } catch (error) {
+      showStatus('An error occurred: ' + error.message, 'error');
+      showCancelButton(false);
+      disableBatchButton(false);
+    }
+  });
+
+  batchSingleFileBtn.addEventListener('click', async () => {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+      if (!isValidDeepWikiUrl(tab.url)) {
+        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., deepwiki.com/org/project)', 'error');
+        return;
+      }
+
+      showCancelButton(true);
+      disableBatchButton(true);
+      showStatus('Starting single-file batch conversion...', 'info');
+
+      const response = await chrome.runtime.sendMessage({ action: 'startBatchSingleFile', tabId: tab.id });
+
+      if (!response || !response.success) {
+        throw new Error(response?.error || 'Failed to start single-file batch conversion.');
       }
     } catch (error) {
       showStatus('An error occurred: ' + error.message, 'error');
@@ -131,6 +172,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function disableBatchButton(disable) {
     batchDownloadBtn.disabled = disable;
+    batchSingleFileBtn.disabled = disable;
   }
 
   function showStatus(message, type) {
