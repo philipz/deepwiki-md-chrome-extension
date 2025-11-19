@@ -1,28 +1,4 @@
-// Utility function to sanitize filenames
-function sanitizeName(value, fallback = 'page') {
-  if (!value || typeof value !== 'string') return fallback;
-  return value
-    .replace(/[\\/:*?"<>|]/g, '-')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    || fallback;
-
-// Validate that the URL has at least two path segments (e.g., /org/project)
-function isValidDeepWikiUrl(url) {
-  if (!url || !url.includes('deepwiki.com')) {
-    return false;
-  }
-
-  try {
-    const urlObj = new URL(url);
-    const pathSegments = urlObj.pathname.split('/').filter(segment => segment.length > 0);
-    // Require at least 2 path segments: /org/project
-    return pathSegments.length >= 2;
-  } catch (error) {
-    return false;
-  }
-}
+// Utility functions are now loaded from utils.js
 
 document.addEventListener('DOMContentLoaded', () => {
   const convertBtn = document.getElementById('convertBtn');
@@ -44,7 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
       if (!isValidDeepWikiUrl(tab.url)) {
-        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., deepwiki.com/org/project)', 'error');
+        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., https://deepwiki.com/org/project)', 'error');
         return;
       }
 
@@ -81,7 +57,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
       if (!isValidDeepWikiUrl(tab.url)) {
-        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., deepwiki.com/org/project)', 'error');
+        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., https://deepwiki.com/org/project)', 'error');
         return;
       }
 
@@ -106,7 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
       if (!isValidDeepWikiUrl(tab.url)) {
-        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., deepwiki.com/org/project)', 'error');
+        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., https://deepwiki.com/org/project)', 'error');
         return;
       }
 

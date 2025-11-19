@@ -1,23 +1,10 @@
 importScripts('lib/jszip.min.js');
+importScripts('utils.js');
 
 const MESSAGE_TIMEOUT = 30000;
 const messageQueue = {};
 
-// Validate that the URL has at least two path segments (e.g., /org/project)
-function isValidDeepWikiUrl(url) {
-  if (!url || !url.includes('deepwiki.com')) {
-    return false;
-  }
-
-  try {
-    const urlObj = new URL(url);
-    const pathSegments = urlObj.pathname.split('/').filter(segment => segment.length > 0);
-    // Require at least 2 path segments: /org/project
-    return pathSegments.length >= 2;
-  } catch (error) {
-    return false;
-  }
-}
+// Utility functions (sanitizeName and isValidDeepWikiUrl) are now loaded from utils.js
 
 const createInitialBatchState = () => ({
   isRunning: false,
@@ -345,20 +332,13 @@ async function createSingleMarkdownFile(fileName) {
     }
   });
 
-  // Create data URL using proper UTF-8 encoding
-  // Convert string to base64 safely (handles Unicode properly)
+  // Create data URL for download
+  // Note: URL.createObjectURL() is not available in service workers,
+  // so we use base64 encoding instead. Using TextEncoder for proper UTF-8 handling.
   const encoder = new TextEncoder();
   const uint8Array = encoder.encode(combinedMarkdown);
-
-  // Convert Uint8Array to base64 string in chunks to avoid stack overflow
-  let binary = '';
-  const chunkSize = 8192;
-  for (let i = 0; i < uint8Array.length; i += chunkSize) {
-    const chunk = uint8Array.slice(i, i + chunkSize);
-    binary += String.fromCharCode.apply(null, chunk);
-  }
-
-  const base64Content = btoa(binary);
+  const binaryString = Array.from(uint8Array, byte => String.fromCharCode(byte)).join('');
+  const base64Content = btoa(binaryString);
   const dataUrl = `data:text/markdown;charset=utf-8;base64,${base64Content}`;
 
   return new Promise((resolve, reject) => {
@@ -506,7 +486,7 @@ async function startBatchProcessing(tabId) {
 
   const tab = await getTabById(tabId);
   if (!isValidDeepWikiUrl(tab.url)) {
-    throw new Error('Please open a valid DeepWiki documentation page (e.g., deepwiki.com/org/project) before starting batch conversion.');
+    throw new Error('Please open a valid DeepWiki documentation page (e.g., https://deepwiki.com/org/project) before starting batch conversion.');
   }
 
   const extraction = await sendMessageToTab(tabId, { action: 'extractAllPages' });
@@ -553,7 +533,7 @@ async function startBatchSingleFileProcessing(tabId) {
 
   const tab = await getTabById(tabId);
   if (!isValidDeepWikiUrl(tab.url)) {
-    throw new Error('Please open a valid DeepWiki documentation page (e.g., deepwiki.com/org/project) before starting batch conversion.');
+    throw new Error('Please open a valid DeepWiki documentation page (e.g., https://deepwiki.com/org/project) before starting batch conversion.');
   }
 
   const extraction = await sendMessageToTab(tabId, { action: 'extractAllPages' });
@@ -566,14 +546,14 @@ async function startBatchSingleFileProcessing(tabId) {
     throw new Error('No child pages were detected on this document.');
   }
 
-  // Extract org and project from URL
+  // Extract org and project from URL and sanitize for safe filenames
   const urlObj = new URL(tab.url);
   const pathSegments = urlObj.pathname.split('/').filter(segment => segment.length > 0);
-  const org = pathSegments[0] || 'org';
-  const project = pathSegments[1] || 'project';
-  const lastIndexedDate = extraction.lastIndexedDate || '';
+  const org = sanitizeName(pathSegments[0] || 'org', 'org');
+  const project = sanitizeName(pathSegments[1] || 'project', 'project');
+  const lastIndexedDate = sanitizeName(extraction.lastIndexedDate || '', '');
 
-  // Generate filename: org-project-date.md
+  // Generate sanitized filename: org-project-date.md
   const fileName = lastIndexedDate
     ? `${org}-${project}-${lastIndexedDate}.md`
     : `${org}-${project}.md`;

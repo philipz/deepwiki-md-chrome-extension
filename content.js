@@ -1,3 +1,6 @@
+// Debug flag to control verbose logging (set to false in production)
+const DEBUG_MODE = false;
+
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "convertToMarkdown") {
@@ -285,11 +288,15 @@ function convertFlowchartSvgToMermaidText(svgElement) {
                 x: bbox.left + bbox.width / 2,
                 y: bbox.top + bbox.height / 2
             };
-            console.log(`Found edge label: "${text}" at (${bbox.left + bbox.width / 2}, ${bbox.top + bbox.height / 2})`);
+            if (DEBUG_MODE) {
+                console.log(`Found edge label: "${text}" at (${bbox.left + bbox.width / 2}, ${bbox.top + bbox.height / 2})`);
+            }
         }
     });
 
-    console.log(`Total edge labels found: ${Object.keys(edgeLabels).length}`);
+    if (DEBUG_MODE) {
+        console.log(`Total edge labels found: ${Object.keys(edgeLabels).length}`);
+    }
   
   svgElement.querySelectorAll('path.flowchart-link').forEach(path => {
         const pathId = path.id;
@@ -333,7 +340,9 @@ function convertFlowchartSvgToMermaidText(svgElement) {
         }
 
         if (!sourceNode || !targetNode) {
-            console.debug("Could not determine source/target for edge:", pathId);
+            if (DEBUG_MODE) {
+                console.debug("Could not determine source/target for edge:", pathId);
+            }
             return;
         }
 
@@ -347,7 +356,9 @@ function convertFlowchartSvgToMermaidText(svgElement) {
                 const svg = svgElement;
                 const ctm = svg.getScreenCTM();
                 if (!ctm) {
-                    console.warn("Could not get screen CTM for SVG");
+                    if (DEBUG_MODE) {
+                        console.warn("Could not get screen CTM for SVG");
+                    }
                     return;
                 }
 
@@ -369,9 +380,13 @@ function convertFlowchartSvgToMermaidText(svgElement) {
                 // Increased threshold to 200px for better label matching
                 if (closestLabel && closestDist < 200) {
           label = closestLabel.text;
-          console.log(`Matched label "${label}" to edge ${sourceNode.mermaidId} -> ${targetNode.mermaidId} (distance: ${closestDist.toFixed(2)}px)`);
+          if (DEBUG_MODE) {
+              console.log(`Matched label "${label}" to edge ${sourceNode.mermaidId} -> ${targetNode.mermaidId} (distance: ${closestDist.toFixed(2)}px)`);
+          }
         } else if (closestLabel) {
-                    console.debug(`Closest label "${closestLabel.text}" too far (${closestDist.toFixed(2)}px) from edge ${sourceNode.mermaidId} -> ${targetNode.mermaidId}`);
+                    if (DEBUG_MODE) {
+                        console.debug(`Closest label "${closestLabel.text}" too far (${closestDist.toFixed(2)}px) from edge ${sourceNode.mermaidId} -> ${targetNode.mermaidId}`);
+                    }
                 }
       }
         } catch (e) {
