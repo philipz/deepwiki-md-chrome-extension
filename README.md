@@ -151,6 +151,12 @@ Contributions are welcome! Feel free to:
 - Suggest features via [Issues](https://github.com/philipz/deepwiki-md-chrome-extension/issues)
 - Submit pull requests
 
+## Privacy
+
+This extension does not collect, store, or transmit any personal data. All conversions happen locally in your browser.
+
+For complete details, see our [Privacy Policy](PRIVACY_POLICY.md).
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) file for details

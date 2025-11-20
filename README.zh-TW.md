@@ -151,6 +151,12 @@
 - 透過 [Issues](https://github.com/philipz/deepwiki-md-chrome-extension/issues) 提出功能建議
 - 提交 Pull Request
 
+## 隱私權
+
+本擴充功能不會收集、儲存或傳輸任何個人資料。所有轉換都在您的瀏覽器本地執行。
+
+完整詳情請參閱我們的[隱私政策](PRIVACY_POLICY.zh-TW.md)。
+
 ## 授權條款
 
 MIT License - 詳見 [LICENSE](LICENSE) 檔案
