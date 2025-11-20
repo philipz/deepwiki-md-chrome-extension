@@ -4,7 +4,7 @@
 # 此腳本會創建一個適合上傳到 Chrome Web Store 的 ZIP 文件
 
 # 設定版本號（從 manifest.json 讀取）
-VERSION=$(grep -oP '(?<="version": ")[^"]*' manifest.json)
+VERSION=$(grep -o '"version": "[^"]*"' manifest.json | sed 's/"version": "\(.*\)"/\1/')
 OUTPUT_FILE="deepwiki-md-extension-v${VERSION}.zip"
 
 echo "正在打包 DeepWiki to Markdown Extension v${VERSION}..."
