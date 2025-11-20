@@ -25,8 +25,22 @@ cp utils.js ${TEMP_DIR}/
 cp styles.css ${TEMP_DIR}/
 
 # 複製目錄
-cp -r icons ${TEMP_DIR}/
-cp -r lib ${TEMP_DIR}/
+echo "複製圖標和函式庫..."
+mkdir -p ${TEMP_DIR}/icons
+mkdir -p ${TEMP_DIR}/lib
+
+# 只複製 Chrome 擴充功能需要的圖標（排除 PWA 相關文件）
+cp icons/icon16.png ${TEMP_DIR}/icons/
+cp icons/icon32.png ${TEMP_DIR}/icons/
+cp icons/icon48.png ${TEMP_DIR}/icons/
+cp icons/icon64.png ${TEMP_DIR}/icons/
+cp icons/icon128.png ${TEMP_DIR}/icons/
+cp icons/icon192.png ${TEMP_DIR}/icons/
+cp icons/icon256.png ${TEMP_DIR}/icons/
+cp icons/icon512.png ${TEMP_DIR}/icons/
+
+# 複製函式庫
+cp lib/jszip.min.js ${TEMP_DIR}/lib/
 
 # 創建 ZIP 文件
 echo "創建 ZIP 文件..."
