@@ -29,15 +29,10 @@ echo "複製圖標和函式庫..."
 mkdir -p ${TEMP_DIR}/icons
 mkdir -p ${TEMP_DIR}/lib
 
-# 只複製 Chrome 擴充功能需要的圖標（排除 PWA 相關文件）
+# 只複製 manifest.json 中實際使用的圖標（16, 48, 128）
 cp icons/icon16.png ${TEMP_DIR}/icons/
-cp icons/icon32.png ${TEMP_DIR}/icons/
 cp icons/icon48.png ${TEMP_DIR}/icons/
-cp icons/icon64.png ${TEMP_DIR}/icons/
 cp icons/icon128.png ${TEMP_DIR}/icons/
-cp icons/icon192.png ${TEMP_DIR}/icons/
-cp icons/icon256.png ${TEMP_DIR}/icons/
-cp icons/icon512.png ${TEMP_DIR}/icons/
 
 # 複製函式庫
 cp lib/jszip.min.js ${TEMP_DIR}/lib/
