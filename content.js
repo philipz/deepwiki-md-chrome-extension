@@ -2,26 +2,42 @@
 const DEBUG_MODE = false;
 
 // Security check: Only allow local file access in debug mode or for test pages
-(function() {
+const ALLOW_SCRIPT_EXECUTION = (function() {
   const currentUrl = window.location.href;
   const isLocalFile = currentUrl.startsWith('file://');
 
-  if (isLocalFile) {
-    // Allow test pages (test-page.html or files in test/ directory)
-    const isTestPage = currentUrl.includes('test-page.html') || currentUrl.includes('/test/');
-
-    // Block local file access if not in debug mode and not a test page
-    if (!DEBUG_MODE && !isTestPage) {
-      console.warn('DeepWiki to Markdown: Local file access is disabled in production mode. Set DEBUG_MODE=true to enable.');
-      // Stop script execution by throwing an error
-      throw new Error('Local file access disabled');
-    }
-
-    if (DEBUG_MODE) {
-      console.log('DeepWiki to Markdown: Running in DEBUG mode on local file');
-    }
+  if (!isLocalFile) {
+    // Always allow on non-local files (e.g., https://deepwiki.com)
+    return true;
   }
+
+  // Check if it's a test page
+  const isTestPage = currentUrl.includes('test-page.html') || currentUrl.includes('/test/');
+
+  if (isTestPage) {
+    // Always allow test pages
+    return true;
+  }
+
+  // For other local files, only allow in debug mode
+  if (DEBUG_MODE) {
+    console.log('DeepWiki to Markdown: Running in DEBUG mode on local file');
+    return true;
+  }
+
+  // Block execution on other local files in production mode
+  console.info('DeepWiki to Markdown: Skipping local file (not a test page). Set DEBUG_MODE=true to enable.');
+  return false;
 })();
+
+// Early exit if script execution is not allowed
+if (!ALLOW_SCRIPT_EXECUTION) {
+  // Do nothing - silently skip execution
+  chrome.runtime.onMessage.addListener(() => {
+    // Respond to prevent "Receiving end does not exist" errors
+    return false;
+  });
+} else {
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -1953,5 +1969,7 @@ function detectCodeLanguage(codeText) {
   return '';
 }
 
-// Notify the background script that the content script is ready
-chrome.runtime.sendMessage({ action: "contentScriptReady" });
+  // Notify the background script that the content script is ready
+  chrome.runtime.sendMessage({ action: "contentScriptReady" });
+
+} // End of ALLOW_SCRIPT_EXECUTION check
