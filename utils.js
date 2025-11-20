@@ -29,6 +29,16 @@ function isValidDeepWikiUrl(url) {
   try {
     const urlObj = new URL(url);
 
+    // Allow test pages (file:// or localhost)
+    if (urlObj.protocol === 'file:' ||
+        urlObj.hostname === 'localhost' ||
+        urlObj.hostname === '127.0.0.1') {
+      // Check if it's a test page
+      if (url.includes('test-page.html') || url.includes('test/')) {
+        return true;
+      }
+    }
+
     // Strict hostname check to prevent matching malicious domains
     // Only allow deepwiki.com or *.deepwiki.com
     const hostname = urlObj.hostname.toLowerCase();

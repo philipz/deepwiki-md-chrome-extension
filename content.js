@@ -1,6 +1,28 @@
 // Debug flag to control verbose logging (set to false in production)
 const DEBUG_MODE = false;
 
+// Security check: Only allow local file access in debug mode or for test pages
+(function() {
+  const currentUrl = window.location.href;
+  const isLocalFile = currentUrl.startsWith('file://');
+
+  if (isLocalFile) {
+    // Allow test pages (test-page.html or files in test/ directory)
+    const isTestPage = currentUrl.includes('test-page.html') || currentUrl.includes('/test/');
+
+    // Block local file access if not in debug mode and not a test page
+    if (!DEBUG_MODE && !isTestPage) {
+      console.warn('DeepWiki to Markdown: Local file access is disabled in production mode. Set DEBUG_MODE=true to enable.');
+      // Stop script execution by throwing an error
+      throw new Error('Local file access disabled');
+    }
+
+    if (DEBUG_MODE) {
+      console.log('DeepWiki to Markdown: Running in DEBUG mode on local file');
+    }
+  }
+})();
+
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "convertToMarkdown") {
