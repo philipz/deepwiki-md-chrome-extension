@@ -150,7 +150,17 @@ MIT License
 - ❌ 是否使用遠端程式碼？**否**
 - ❌ 是否收集或傳輸個人資料？**否**
 
-**說明文字：**
+**隱私政策 URL（如需要）：**
+```
+https://github.com/philipz/deepwiki-md-chrome-extension/blob/main/PRIVACY_POLICY.md
+```
+
+或使用繁體中文版：
+```
+https://github.com/philipz/deepwiki-md-chrome-extension/blob/main/PRIVACY_POLICY.zh-TW.md
+```
+
+**認證說明文字：**
 ```
 本擴充功能完全在瀏覽器本地運作。所有從 DeepWiki 到 Markdown 的轉換都在
 客戶端進行。不會收集、儲存或傳輸任何資料到外部伺服器。
@@ -161,6 +171,8 @@ MIT License
 - 將檔案儲存到使用者的本地下載資料夾
 
 不執行任何分析、追蹤或資料收集。
+
+完整隱私政策：https://github.com/philipz/deepwiki-md-chrome-extension/blob/main/PRIVACY_POLICY.md
 ```
 
 ### 步驟 5：定價與發布

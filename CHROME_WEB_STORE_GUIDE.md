@@ -182,7 +182,12 @@ MIT License
 **是否收集或傳輸個人資料？**
 - ❌ No - This extension does not collect any user data
 
-**認證資訊（如需要）：**
+**Privacy Policy URL (if required):**
+```
+https://github.com/philipz/deepwiki-md-chrome-extension/blob/main/PRIVACY_POLICY.md
+```
+
+**Certification Statement:**
 ```
 This extension operates entirely locally in the browser. All conversions from DeepWiki to Markdown happen client-side. No data is collected, stored, or transmitted to any external servers.
 
@@ -192,6 +197,8 @@ The extension only:
 - Saves files to the user's local download folder
 
 No analytics, tracking, or data collection of any kind is performed.
+
+Full privacy policy: https://github.com/philipz/deepwiki-md-chrome-extension/blob/main/PRIVACY_POLICY.md
 ```
 
 ### 步驟 5：定價與發布
