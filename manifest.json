@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DeepWiki to Markdown",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Convert DeepWiki page content to Markdown format and save it",
   "permissions": [
     "downloads",
@@ -21,8 +21,12 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://deepwiki.com/*", "file:///*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://deepwiki.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_end"
     }
   ],
