@@ -2,6 +2,8 @@
 
 一个将 DeepWiki 文档页面转换为 Markdown 格式的 Chrome 扩展，方便本地编辑和存档。
 
+[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/giidpddkhhjaikgjkkfclfidbnekghde?label=Chrome%20Web%20Store)](https://chromewebstore.google.com/detail/deepwiki-to-markdown/giidpddkhhjaikgjkkfclfidbnekghde)
+
 [English](./README.md) | [繁體中文](./README.zh-TW.md)
 
 ## 概述
@@ -32,7 +34,13 @@
 
 ## 安装
 
-本扩展尚未发布到 Chrome 网上应用店。使用方法：
+### 方法一：从 Chrome 网上应用店安装（推荐）
+
+1. 访问 [Chrome 网上应用店](https://chromewebstore.google.com/detail/deepwiki-to-markdown/giidpddkhhjaikgjkkfclfidbnekghde)
+2. 点击"添加至 Chrome"
+3. 验证安装 - DeepWiki 图标应该出现在扩展工具栏中
+
+### 方法二：从源码安装
 
 1. **下载扩展**
    - 克隆此仓库：`git clone https://github.com/philipz/deepwiki-md-chrome-extension.git`

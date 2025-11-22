@@ -2,6 +2,8 @@
 
 A Chrome extension to convert DeepWiki documentation pages to Markdown format for local editing and archiving.
 
+[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/giidpddkhhjaikgjkkfclfidbnekghde?label=Chrome%20Web%20Store)](https://chromewebstore.google.com/detail/deepwiki-to-markdown/giidpddkhhjaikgjkkfclfidbnekghde)
+
 [简体中文](./README.zh-CN.md) | [繁體中文](./README.zh-TW.md)
 
 ## Overview
@@ -32,7 +34,13 @@ Merge all documentation pages into a single Markdown file for easy reading and s
 
 ## Installation
 
-This extension is not yet published on the Chrome Web Store. To use it:
+### Option 1: Install from Chrome Web Store (Recommended)
+
+1. Visit the [Chrome Web Store](https://chromewebstore.google.com/detail/deepwiki-to-markdown/giidpddkhhjaikgjkkfclfidbnekghde)
+2. Click "Add to Chrome"
+3. Verify installation - the DeepWiki icon should appear in your extensions toolbar
+
+### Option 2: Install from Source
 
 1. **Download the extension**
    - Clone this repository: `git clone https://github.com/philipz/deepwiki-md-chrome-extension.git`
