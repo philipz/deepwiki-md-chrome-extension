@@ -25,6 +25,7 @@
         "https://deepwiki.com/*"
       ],
       "js": [
+        "utils.js",
         "content.js"
       ],
       "run_at": "document_end"

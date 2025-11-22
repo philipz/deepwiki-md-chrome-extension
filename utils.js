@@ -1,5 +1,8 @@
 // Shared utility functions for the extension
 
+// Debug flag to control verbose logging (set to false in production)
+const DEBUG_MODE = false;
+
 /**
  * Sanitizes a string to be used as a filename
  * @param {string} value - The value to sanitize
@@ -31,8 +34,8 @@ function isValidDeepWikiUrl(url) {
 
     // Allow test pages (file:// or localhost)
     if (urlObj.protocol === 'file:' ||
-        urlObj.hostname === 'localhost' ||
-        urlObj.hostname === '127.0.0.1') {
+      urlObj.hostname === 'localhost' ||
+      urlObj.hostname === '127.0.0.1') {
       // Check if it's a test page
       if (url.includes('test-page.html') || url.includes('test/')) {
         return true;

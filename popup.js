@@ -120,7 +120,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await chrome.runtime.sendMessage({ action: 'getBatchStatus' });
       applyBatchStatus(response);
     } catch (error) {
-      console.warn('Unable to fetch batch status:', error.message);
+      if (typeof DEBUG_MODE !== 'undefined' && DEBUG_MODE) {
+        console.debug('Unable to fetch batch status:', error.message);
+      }
     }
   }
 

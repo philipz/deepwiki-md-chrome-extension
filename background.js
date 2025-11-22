@@ -141,7 +141,9 @@ function broadcastBatchUpdate(type, data = {}, overrideRunning) {
   chrome.runtime.sendMessage(payload, () => {
     const error = chrome.runtime.lastError;
     if (error && error.message && !error.message.includes('Receiving end does not exist')) {
-      console.warn('Batch update broadcast error:', error.message);
+      if (typeof DEBUG_MODE !== 'undefined' && DEBUG_MODE) {
+        console.debug('Batch update broadcast error:', error.message);
+      }
     }
   });
 }
@@ -207,7 +209,9 @@ async function restoreOriginalPage() {
   try {
     await navigateToPage(batchState.tabId, batchState.originalUrl);
   } catch (error) {
-    console.warn('Failed to restore original page:', error.message);
+    if (typeof DEBUG_MODE !== 'undefined' && DEBUG_MODE) {
+      console.debug('Failed to restore original page:', error.message);
+    }
   } finally {
     batchState.originalUrl = null;
   }

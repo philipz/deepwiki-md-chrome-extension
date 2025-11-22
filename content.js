@@ -1,5 +1,5 @@
 // Debug flag to control verbose logging (set to false in production)
-const DEBUG_MODE = false;
+// Debug flag is now loaded from utils.js
 
 // Security check: Only allow local file access in debug mode or for test pages
 const ALLOW_SCRIPT_EXECUTION = (function () {
@@ -273,7 +273,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       }
     }
 
-    // 4. Process edges and labels using Index-Based Matching
+    // 4. Process edges and labels using Geometric Matching (Nearest Neighbor)
     const edges = [];
 
     const pathElements = Array.from(svgElement.querySelectorAll('path.flowchart-link'));
@@ -281,98 +281,23 @@ if (!ALLOW_SCRIPT_EXECUTION) {
 
     console.log(`Found ${pathElements.length} paths and ${labelElements.length} labels.`);
 
-    if (pathElements.length !== labelElements.length) {
-      console.warn("Mismatch in path and label counts! Falling back to best-effort matching.");
-      // If counts don't match, we might need a fallback, but let's try 1-to-1 up to the min length
+    // Helper to get center of an element
+    function getCenter(bbox) {
+      return {
+        x: bbox.x + bbox.width / 2,
+        y: bbox.y + bbox.height / 2
+      };
     }
 
-    const count = Math.min(pathElements.length, labelElements.length);
+    // Helper to get distance between two points
+    function getDistance(p1, p2) {
+      return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+    }
 
-    for (let i = 0; i < count; i++) {
-      const path = pathElements[i];
-      const labelEl = labelElements[i];
-      const pathId = path.id;
-
-      if (!pathId) continue;
-
-      // Extract Source and Target from Path ID
-      // Format: L_{source}_{target}_{index} or flowchart-{source}-{target}-{index}
-      let sourceId = null;
-      let targetId = null;
-
-      // Try L_ format first (most common in DeepWiki)
-      let match = pathId.match(/^L_([^_]+)_(.+)_\d+$/);
-      if (match) {
-        sourceId = match[1];
-        targetId = match[2];
-        // Handle cases where target might contain underscores (e.g. orders_schema)
-        // The regex (.+) is greedy, so we might need to be careful.
-        // Actually, usually the last part is the index.
-        // Let's try to be smarter if needed.
-        // If nodes have underscores, this parsing is tricky.
-        // But we have the list of known mermaidIds from nodes!
-      } else {
-        // Try flowchart- format
-        match = pathId.match(/^flowchart-([^-]+)-([^-]+)-\d+$/);
-        if (match) {
-          sourceId = match[1];
-          targetId = match[2];
-        }
-      }
-
-      // Robust ID matching against known nodes
-      if (!sourceId || !targetId) {
-        // Fallback: Split by separator and check against known node IDs
-        const parts = pathId.replace(/^(L_|flowchart-)/, '').split(/[-_]/);
-        // This is hard because we don't know where the split is.
-        // But we know valid mermaidIds from our nodes list.
-
-        // Try to find the longest prefix that matches a node
-        for (const nodeSvgId in nodes) {
-          const mId = nodes[nodeSvgId].mermaidId;
-          if (pathId.includes(mId)) {
-            // This is fuzzy. Let's stick to the regex if possible.
-          }
-        }
-      }
-
-      // If regex failed or was ambiguous, try to match parts against known nodes
-      if (!sourceId || !targetId) {
-        // Remove prefix and suffix index
-        let core = pathId.replace(/^(L_|flowchart-)/, '').replace(/[-_]\d+$/, '');
-        // Try to split at every possible point
-        for (let j = 1; j < core.length; j++) {
-          const s = core.substring(0, j);
-          const t = core.substring(j + 1); // +1 to skip separator? Separator might be _ or -
-
-          // Check if s and t are valid mermaidIds (or close to them)
-          // This is tricky. Let's assume the regex works for 99% of cases.
-          // DeepWiki seems to use L_source_target_index.
-        }
-      }
-
-      // If we still don't have source/target, skip
-      if (!sourceId || !targetId) {
-        console.warn(`Could not parse source/target from path ID: ${pathId}`);
-        continue;
-      }
-
-      // Find the actual node objects
-      // We need to map the ID from the path (e.g. "orders") to the node object
-      // The node object has mermaidId "orders".
-
-      // Find node with mermaidId === sourceId
-      const sourceNode = Object.values(nodes).find(n => n.mermaidId === sourceId);
-      const targetNode = Object.values(nodes).find(n => n.mermaidId === targetId);
-
-      if (!sourceNode || !targetNode) {
-        // It might be connecting to a cluster or a node we missed?
-        // Or maybe the ID parsing was slightly off (e.g. case sensitivity)
-        // console.warn(`Could not find nodes for path ${pathId}: ${sourceId} -> ${targetId}`);
-        continue;
-      }
-
-      // Extract Label Text
+    // Map labels to their centers
+    const labelData = labelElements.map(labelEl => {
+      const bbox = labelEl.getBoundingClientRect();
+      // Extract text content
       let labelText = "";
       const foreignObj = labelEl.querySelector('foreignObject span, foreignObject div, foreignObject p');
       if (foreignObj) {
@@ -380,12 +305,135 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       } else {
         labelText = labelEl.textContent?.trim();
       }
+      return {
+        element: labelEl,
+        center: getCenter(bbox),
+        text: labelText,
+        matched: false
+      };
+    });
+
+    // Process each path
+    pathElements.forEach(path => {
+      const pathId = path.id;
+      if (!pathId) return;
+
+      // --- ID Parsing Logic ---
+      let sourceId = null;
+      let targetId = null;
+
+      // Strategy 1: L_ format (L_source_target_index)
+      let match = pathId.match(/^L_([^_]+)_(.+)_\d+$/);
+      if (match) {
+        sourceId = match[1];
+        targetId = match[2];
+      }
+
+      // Strategy 2: flowchart- format (flowchart-source-target-index)
+      if (!sourceId) {
+        match = pathId.match(/^flowchart-([^-]+)-([^-]+)-\d+$/);
+        if (match) {
+          sourceId = match[1];
+          targetId = match[2];
+        }
+      }
+
+      // Strategy 3: Robust Fallback (Split and Match)
+      if (!sourceId || !targetId) {
+        let core = pathId.replace(/^(L_|flowchart-)/, '').replace(/[-_]\d+$/, '');
+
+        // Try to split at every possible point
+        for (let j = 1; j < core.length; j++) {
+          const charAtJ = core[j];
+          if (charAtJ === '-' || charAtJ === '_') {
+            const s_clean = core.substring(0, j);
+            const t_clean = core.substring(j + 1);
+
+            // Check against known nodes
+            const sourceNode = Object.values(nodes).find(n => n.mermaidId === s_clean);
+            const targetNode = Object.values(nodes).find(n => n.mermaidId === t_clean);
+
+            if (sourceNode && targetNode) {
+              sourceId = s_clean;
+              targetId = t_clean;
+              break;
+            }
+          }
+        }
+      }
+
+      // Strategy 4: Greedy Match (Longest Prefix)
+      if (!sourceId || !targetId) {
+        let core = pathId.replace(/^(L_|flowchart-)/, '').replace(/[-_]\d+$/, '');
+        let bestSource = null;
+        let bestTarget = null;
+
+        for (const nodeSvgId in nodes) {
+          const mId = nodes[nodeSvgId].mermaidId;
+          if (core.startsWith(mId)) {
+            const remainder = core.substring(mId.length);
+            if (remainder.startsWith('-') || remainder.startsWith('_')) {
+              const targetCandidate = remainder.substring(1);
+              const targetNode = Object.values(nodes).find(n => n.mermaidId === targetCandidate);
+              if (targetNode) {
+                if (!bestSource || mId.length > bestSource.length) {
+                  bestSource = mId;
+                  bestTarget = targetCandidate;
+                }
+              }
+            }
+          }
+        }
+        if (bestSource && bestTarget) {
+          sourceId = bestSource;
+          targetId = bestTarget;
+        }
+      }
+
+      if (!sourceId || !targetId) {
+        if (DEBUG_MODE) {
+          console.debug(`Could not parse source/target from path ID: ${pathId}`);
+        }
+        return;
+      }
+
+      const sourceNode = Object.values(nodes).find(n => n.mermaidId === sourceId);
+      const targetNode = Object.values(nodes).find(n => n.mermaidId === targetId);
+
+      if (!sourceNode || !targetNode) return;
+
+      // --- Label Matching Logic ---
+      let matchedLabelText = "";
+
+      // Find the closest label to this path
+      // We use the path's bounding box center as a proxy for the path's position
+      const pathBBox = path.getBoundingClientRect();
+      const pathCenter = getCenter(pathBBox);
+
+      let closestLabel = null;
+      let minDistance = Infinity;
+      const MAX_DISTANCE_THRESHOLD = 100; // Pixels, adjust if needed
+
+      labelData.forEach(label => {
+        if (label.matched) return; // Skip already matched labels (optional, but good for 1-to-1)
+
+        const dist = getDistance(pathCenter, label.center);
+        if (dist < minDistance && dist < MAX_DISTANCE_THRESHOLD) {
+          minDistance = dist;
+          closestLabel = label;
+        }
+      });
+
+      if (closestLabel) {
+        matchedLabelText = closestLabel.text;
+        closestLabel.matched = true; // Mark as matched
+      }
 
       // Determine Arrow Type
       const isDashed = path.classList.contains('dashed') || path.classList.contains('dotted');
       const arrow = isDashed ? "-.->" : "-->";
 
-      const labelPart = labelText ? `|"${labelText}"|` : "";
+      const labelPart = matchedLabelText ? `|"${matchedLabelText}"|` : "";
       const edgeText = `${sourceNode.mermaidId} ${arrow}${labelPart} ${targetNode.mermaidId}`;
 
       // Determine Parent (LCA)
@@ -399,7 +447,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       }
 
       edges.push({ text: edgeText, parentId: lca || 'root' });
-    }
+    });
 
     // 5. Generate Mermaid output
     const definedNodeMermaidIds = new Set();
