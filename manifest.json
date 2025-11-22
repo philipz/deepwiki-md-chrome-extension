@@ -22,8 +22,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://deepwiki.com/*",
-        "file:///*"
+        "https://deepwiki.com/*"
       ],
       "js": [
         "content.js"
