@@ -270,6 +270,9 @@ async function processSinglePage(page) {
   await navigateToPage(batchState.tabId, page.url);
   if (batchState.cancelRequested) return;
 
+  // Wait for dynamic content (Mermaid diagrams) to render
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
   const convertResponse = await sendMessageToTab(batchState.tabId, { action: 'convertToMarkdown' });
   if (!convertResponse || !convertResponse.success) {
     throw new Error(convertResponse?.error || 'Conversion failed');

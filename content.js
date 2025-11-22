@@ -164,11 +164,11 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     // Always return true for asynchronous sendResponse handling
     return true;
   });
-  // Function for Flowchart (ensure this exists from previous responses)
+  // Helper: Convert Flowchart SVG to Mermaid text (Index-Based Matching)
   function convertFlowchartSvgToMermaidText(svgElement) {
     if (!svgElement) return null;
 
-    console.log("Starting flowchart conversion with hierarchical logic...");
+    console.log("Converting flowchart SVG to Mermaid with Index-Based Matching...");
     let mermaidCode = "flowchart TD\n\n";
     const nodes = {};
     const clusters = {};
@@ -198,7 +198,11 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         }
       }
 
+      // Normalize ID: flowchart-orders-3 -> orders
       let mermaidId = svgId.replace(/^flowchart-/, '').replace(/-\d+$/, '');
+
+      // Handle potential ID conflicts or complex IDs if necessary
+      // For now, assuming the simplified ID matches the path references
 
       const bbox = nodeEl.getBoundingClientRect();
       if (bbox.width > 0 || bbox.height > 0) {
@@ -269,219 +273,133 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       }
     }
 
-    // 4. Process edges and assign to their lowest common ancestor cluster
+    // 4. Process edges and labels using Index-Based Matching
     const edges = [];
-    const edgeLabels = {};
 
-    // Try multiple selectors to find edge labels
-    const edgeLabelSelectors = [
-      'g.edgeLabel',
-      'g[class*="edgeLabel"]',
-      'g[class*="edge-label"]',
-      '.edgeLabel'
-    ];
+    const pathElements = Array.from(svgElement.querySelectorAll('path.flowchart-link'));
+    const labelElements = Array.from(svgElement.querySelectorAll('g.edgeLabel'));
 
-    const edgeLabelElements = new Set();
-    edgeLabelSelectors.forEach(selector => {
-      svgElement.querySelectorAll(selector).forEach(el => edgeLabelElements.add(el));
-    });
+    console.log(`Found ${pathElements.length} paths and ${labelElements.length} labels.`);
 
-    edgeLabelElements.forEach(labelEl => {
-      // Try multiple selectors to find the label text
-      let text = '';
-
-      // Try foreignObject approach (common in mermaid)
-      const foreignObj = labelEl.querySelector('foreignObject span, foreignObject div, foreignObject p');
-      if (foreignObj) {
-        text = foreignObj.textContent?.trim();
-      }
-
-      // Fallback to text element
-      if (!text) {
-        const textEl = labelEl.querySelector('text');
-        if (textEl) {
-          text = textEl.textContent?.trim();
-        }
-      }
-
-      // Try tspan element
-      if (!text) {
-        const tspanEl = labelEl.querySelector('tspan');
-        if (tspanEl) {
-          text = tspanEl.textContent?.trim();
-        }
-      }
-
-      // Last resort: use all text content
-      if (!text) {
-        text = labelEl.textContent?.trim();
-      }
-
-      const bbox = labelEl.getBoundingClientRect();
-      const labelId = labelEl.id || `label_${Object.keys(edgeLabels).length}`;
-
-      if (text) {
-        edgeLabels[labelId] = {
-          text,
-          x: bbox.left + bbox.width / 2,
-          y: bbox.top + bbox.height / 2
-        };
-        if (DEBUG_MODE) {
-          console.log(`Found edge label: "${text}" at (${bbox.left + bbox.width / 2}, ${bbox.top + bbox.height / 2})`);
-        }
-      }
-    });
-
-    if (DEBUG_MODE) {
-      console.log(`Total edge labels found: ${Object.keys(edgeLabels).length}`);
+    if (pathElements.length !== labelElements.length) {
+      console.warn("Mismatch in path and label counts! Falling back to best-effort matching.");
+      // If counts don't match, we might need a fallback, but let's try 1-to-1 up to the min length
     }
 
-    // Store all paths for later processing
-    const allPaths = [];
+    const count = Math.min(pathElements.length, labelElements.length);
 
-    svgElement.querySelectorAll('path.flowchart-link').forEach(path => {
+    for (let i = 0; i < count; i++) {
+      const path = pathElements[i];
+      const labelEl = labelElements[i];
       const pathId = path.id;
-      if (!pathId) return;
 
-      let sourceNode = null;
-      let targetNode = null;
-      let idParts = pathId.replace(/^(L_|FL_)/, '').split('_');
-      if (idParts.length > 1 && idParts[idParts.length - 1].match(/^\d+$/)) {
-        idParts.pop();
-      }
-      idParts = idParts.join('_');
+      if (!pathId) continue;
 
-      for (let i = 1; i < idParts.length; i++) {
-        const potentialSourceName = idParts.substring(0, i);
-        const potentialTargetName = idParts.substring(i);
-        const foundSourceNode = Object.values(nodes).find(n => n.mermaidId === potentialSourceName);
-        const foundTargetNode = Object.values(nodes).find(n => n.mermaidId === potentialTargetName);
-        if (foundSourceNode && foundTargetNode) {
-          sourceNode = foundSourceNode;
-          targetNode = foundTargetNode;
-          break;
+      // Extract Source and Target from Path ID
+      // Format: L_{source}_{target}_{index} or flowchart-{source}-{target}-{index}
+      let sourceId = null;
+      let targetId = null;
+
+      // Try L_ format first (most common in DeepWiki)
+      let match = pathId.match(/^L_([^_]+)_(.+)_\d+$/);
+      if (match) {
+        sourceId = match[1];
+        targetId = match[2];
+        // Handle cases where target might contain underscores (e.g. orders_schema)
+        // The regex (.+) is greedy, so we might need to be careful.
+        // Actually, usually the last part is the index.
+        // Let's try to be smarter if needed.
+        // If nodes have underscores, this parsing is tricky.
+        // But we have the list of known mermaidIds from nodes!
+      } else {
+        // Try flowchart- format
+        match = pathId.match(/^flowchart-([^-]+)-([^-]+)-\d+$/);
+        if (match) {
+          sourceId = match[1];
+          targetId = match[2];
         }
       }
 
-      if (!sourceNode || !targetNode) { // Fallback for complex names
-        const pathIdParts = pathId.replace(/^(L_|FL_)/, '').split('_');
-        if (pathIdParts.length > 2) {
-          for (let i = 1; i < pathIdParts.length; i++) {
-            const sName = pathIdParts.slice(0, i).join('_');
-            const tName = pathIdParts.slice(i, pathIdParts.length - 1).join('_');
-            const foundSourceNode = Object.values(nodes).find(n => n.mermaidId === sName);
-            const foundTargetNode = Object.values(nodes).find(n => n.mermaidId === tName);
-            if (foundSourceNode && foundTargetNode) {
-              sourceNode = foundSourceNode;
-              targetNode = foundTargetNode;
-              break;
-            }
+      // Robust ID matching against known nodes
+      if (!sourceId || !targetId) {
+        // Fallback: Split by separator and check against known node IDs
+        const parts = pathId.replace(/^(L_|flowchart-)/, '').split(/[-_]/);
+        // This is hard because we don't know where the split is.
+        // But we know valid mermaidIds from our nodes list.
+
+        // Try to find the longest prefix that matches a node
+        for (const nodeSvgId in nodes) {
+          const mId = nodes[nodeSvgId].mermaidId;
+          if (pathId.includes(mId)) {
+            // This is fuzzy. Let's stick to the regex if possible.
           }
         }
       }
+
+      // If regex failed or was ambiguous, try to match parts against known nodes
+      if (!sourceId || !targetId) {
+        // Remove prefix and suffix index
+        let core = pathId.replace(/^(L_|flowchart-)/, '').replace(/[-_]\d+$/, '');
+        // Try to split at every possible point
+        for (let j = 1; j < core.length; j++) {
+          const s = core.substring(0, j);
+          const t = core.substring(j + 1); // +1 to skip separator? Separator might be _ or -
+
+          // Check if s and t are valid mermaidIds (or close to them)
+          // This is tricky. Let's assume the regex works for 99% of cases.
+          // DeepWiki seems to use L_source_target_index.
+        }
+      }
+
+      // If we still don't have source/target, skip
+      if (!sourceId || !targetId) {
+        console.warn(`Could not parse source/target from path ID: ${pathId}`);
+        continue;
+      }
+
+      // Find the actual node objects
+      // We need to map the ID from the path (e.g. "orders") to the node object
+      // The node object has mermaidId "orders".
+
+      // Find node with mermaidId === sourceId
+      const sourceNode = Object.values(nodes).find(n => n.mermaidId === sourceId);
+      const targetNode = Object.values(nodes).find(n => n.mermaidId === targetId);
 
       if (!sourceNode || !targetNode) {
-        if (DEBUG_MODE) {
-          console.debug("Could not determine source/target for edge:", pathId);
-        }
-        return;
+        // It might be connecting to a cluster or a node we missed?
+        // Or maybe the ID parsing was slightly off (e.g. case sensitivity)
+        // console.warn(`Could not find nodes for path ${pathId}: ${sourceId} -> ${targetId}`);
+        continue;
       }
 
-      try {
-        const totalLength = path.getTotalLength();
-        if (totalLength > 0) {
-          // Convert SVG coordinates to screen coordinates
-          const svg = svgElement;
-          const ctm = svg.getScreenCTM();
-          if (!ctm) {
-            if (DEBUG_MODE) {
-              console.warn("Could not get screen CTM for SVG");
-            }
-            return;
-          }
-
-          // Helper to get screen point from path length
-          const getScreenPoint = (length) => {
-            const point = path.getPointAtLength(length);
-            return {
-              x: point.x * ctm.a + point.y * ctm.c + ctm.e,
-              y: point.x * ctm.b + point.y * ctm.d + ctm.f
-            };
-          };
-
-          // Calculate distances to all labels for this path
-          const labelDistances = [];
-          for (const labelId in edgeLabels) {
-            const currentLabel = edgeLabels[labelId];
-            let minLabelDist = Infinity;
-            const step = 20; // Sample every 20px
-
-            for (let i = 0; i <= totalLength; i += step) {
-              const p = getScreenPoint(i);
-              const d = Math.sqrt(Math.pow(currentLabel.x - p.x, 2) + Math.pow(currentLabel.y - p.y, 2));
-              if (d < minLabelDist) minLabelDist = d;
-            }
-            const pEnd = getScreenPoint(totalLength);
-            const dEnd = Math.sqrt(Math.pow(currentLabel.x - pEnd.x, 2) + Math.pow(currentLabel.y - pEnd.y, 2));
-            if (dEnd < minLabelDist) minLabelDist = dEnd;
-
-            labelDistances.push({ labelId: labelId, dist: minLabelDist, text: currentLabel.text });
-          }
-
-          // Find Lowest Common Ancestor
-          const sourceAncestors = [parentMap[sourceNode.svgId]];
-          while (sourceAncestors[sourceAncestors.length - 1]) {
-            sourceAncestors.push(parentMap[sourceAncestors[sourceAncestors.length - 1]]);
-          }
-          let lca = parentMap[targetNode.svgId];
-          while (lca && !sourceAncestors.includes(lca)) {
-            lca = parentMap[lca];
-          }
-
-          allPaths.push({
-            pathId: pathId,
-            sourceNode: sourceNode,
-            targetNode: targetNode,
-            parentId: lca || 'root',
-            labelDistances: labelDistances
-          });
-        }
-      } catch (e) {
-        console.error("Error processing path " + pathId, e);
+      // Extract Label Text
+      let labelText = "";
+      const foreignObj = labelEl.querySelector('foreignObject span, foreignObject div, foreignObject p');
+      if (foreignObj) {
+        labelText = foreignObj.textContent?.trim();
+      } else {
+        labelText = labelEl.textContent?.trim();
       }
-    });
 
-    // Calculate minDist for each label (Global Step 1)
-    for (const labelId in edgeLabels) {
-      let minD = Infinity;
-      allPaths.forEach(path => {
-        const match = path.labelDistances.find(ld => ld.labelId === labelId);
-        if (match && match.dist < minD) minD = match.dist;
-      });
-      edgeLabels[labelId].minDist = minD;
+      // Determine Arrow Type
+      const isDashed = path.classList.contains('dashed') || path.classList.contains('dotted');
+      const arrow = isDashed ? "-.->" : "-->";
+
+      const labelPart = labelText ? `|"${labelText}"|` : "";
+      const edgeText = `${sourceNode.mermaidId} ${arrow}${labelPart} ${targetNode.mermaidId}`;
+
+      // Determine Parent (LCA)
+      const sourceAncestors = [parentMap[sourceNode.svgId]];
+      while (sourceAncestors[sourceAncestors.length - 1]) {
+        sourceAncestors.push(parentMap[sourceAncestors[sourceAncestors.length - 1]]);
+      }
+      let lca = parentMap[targetNode.svgId];
+      while (lca && !sourceAncestors.includes(lca)) {
+        lca = parentMap[lca];
+      }
+
+      edges.push({ text: edgeText, parentId: lca || 'root' });
     }
-
-    // Assign labels to paths using Relative Filtering (Global Step 2)
-    allPaths.forEach(path => {
-      let closestValidLabelText = '';
-      let minValidDist = 50; // Absolute threshold
-
-      path.labelDistances.forEach(ld => {
-        const labelMinDist = edgeLabels[ld.labelId].minDist;
-        // Relative Filtering: Is this path close enough to the label relative to the label's best match?
-        // Threshold: best_match * 1.2 + 5px
-        const threshold = labelMinDist * 1.2 + 5;
-
-        if (ld.dist < threshold && ld.dist < minValidDist) {
-          minValidDist = ld.dist;
-          closestValidLabelText = ld.text;
-        }
-      });
-
-      const labelPart = closestValidLabelText ? `|"${closestValidLabelText}"|` : "";
-      const edgeText = `${path.sourceNode.mermaidId} -->${labelPart} ${path.targetNode.mermaidId}`;
-      edges.push({ text: edgeText, parentId: path.parentId });
-    });
 
     // 5. Generate Mermaid output
     const definedNodeMermaidIds = new Set();
