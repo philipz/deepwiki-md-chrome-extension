@@ -965,10 +965,37 @@ if (!ALLOW_SCRIPT_EXECUTION) {
    * @param {SVGElement} svgElement - The SVG DOM element for the sequence diagram
    * @returns {string|null}
    */
+  // Constants for Sequence Diagram Parsing
+  const SEQ_CONSTANTS = {
+    TOLERANCE: 2,
+    SELF_MESSAGE_DIST: 20,
+    BLOCK_TEXT_Y_MARGIN: 5,
+    BLOCK_DIVIDER_Y_MARGIN: 5,
+    BLOCK_DIVIDER_LOOKAHEAD: 40,
+    NOTE_Y_OFFSET: 1
+  };
+
+  /**
+   * Helper: Convert SVG Sequence Diagram to Mermaid code
+   * @param {SVGElement} svgElement - The SVG DOM element for the sequence diagram
+   * @returns {string|null}
+   */
   function convertSequenceDiagramSvgToMermaidText(svgElement) {
     if (!svgElement) return null;
 
-    // 1. Parse participants 
+    const uniqueParticipants = parseParticipants(svgElement);
+    const notes = parseNotes(svgElement, uniqueParticipants);
+    const messages = parseMessages(svgElement, uniqueParticipants);
+    const blocks = parseBlocks(svgElement);
+
+    if (uniqueParticipants.length === 0 && messages.length === 0) return null;
+
+    console.log("Sequence diagram conversion completed. Participants:", uniqueParticipants.length, "Messages:", messages.length, "Notes:", notes.length); // DEBUG
+
+    return generateMermaidCode(uniqueParticipants, messages, notes, blocks);
+  }
+
+  function parseParticipants(svgElement) {
     const participants = [];
     console.log("Looking for sequence participants..."); // DEBUG
 
@@ -994,8 +1021,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         seenNames.add(p.name);
       }
     });
+    return uniqueParticipants;
+  }
 
-    // 2. Parse Notes
+  function parseNotes(svgElement, uniqueParticipants) {
     const notes = [];
     svgElement.querySelectorAll('g').forEach(g => {
       const noteRect = g.querySelector('rect.note');
@@ -1040,8 +1069,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         }
       }
     });
+    return notes;
+  }
 
-    // 3. Parse message lines and message text
+  function parseMessages(svgElement, uniqueParticipants) {
     const messages = [];
 
     // Collect all message texts
@@ -1088,7 +1119,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           const y2 = parseFloat(endMatch[2]);
 
           // Check if it's a self message (start and end x coordinates are close)
-          if (Math.abs(x1 - x2) < 20) { // Allow some margin of error
+          if (Math.abs(x1 - x2) < SEQ_CONSTANTS.SELF_MESSAGE_DIST) {
             messageLines.push({
               x1, y1, x2, y2, isDashed,
               isSelfMessage: true
@@ -1101,7 +1132,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     messageLines.sort((a, b) => a.y1 - b.y1);
     console.log("Found message lines:", messageLines.length); // DEBUG
 
-    // 4. Match message lines and message text
+    // Match message lines and message text
     for (let i = 0; i < Math.min(messageLines.length, messageTexts.length); i++) {
       const line = messageLines[i];
       const messageText = messageTexts[i];
@@ -1161,36 +1192,163 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         console.log(`Message ${i + 1}: ${fromParticipant} ${arrow} ${toParticipant}: ${messageText.text}`); // DEBUG
       }
     }
+    return messages;
+  }
 
-    // 5. Parse loop areas
-    const loops = [];
-    const loopLines = svgElement.querySelectorAll('line.loopLine');
-    if (loopLines.length >= 4) {
-      const xs = Array.from(loopLines).map(line => [
-        parseFloat(line.getAttribute('x1')),
-        parseFloat(line.getAttribute('x2'))
-      ]).flat();
-      const ys = Array.from(loopLines).map(line => [
-        parseFloat(line.getAttribute('y1')),
-        parseFloat(line.getAttribute('y2'))
-      ]).flat();
+  function parseBlocks(svgElement) {
+    const blocks = [];
+    const loopLines = Array.from(svgElement.querySelectorAll('line.loopLine'));
 
-      const xMin = Math.min(...xs);
-      const xMax = Math.max(...xs);
-      const yMin = Math.min(...ys);
-      const yMax = Math.max(...ys);
+    // Group lines into boxes (rectangles)
+    // A box is defined by 4 lines (top, bottom, left, right)
+    // We need to find connected components of lines
+    const processedLines = new Set();
 
-      let loopText = '';
-      const loopTextEl = svgElement.querySelector('.loopText');
-      if (loopTextEl) {
-        loopText = loopTextEl.textContent.trim();
+    function findConnectedLines(startLine, currentGroup) {
+      const stack = [startLine];
+      while (stack.length > 0) {
+        const line = stack.pop();
+        if (processedLines.has(line)) continue;
+        processedLines.add(line);
+        currentGroup.push(line);
+
+        const x1 = parseFloat(line.getAttribute('x1'));
+        const y1 = parseFloat(line.getAttribute('y1'));
+        const x2 = parseFloat(line.getAttribute('x2'));
+        const y2 = parseFloat(line.getAttribute('y2'));
+
+        loopLines.forEach(otherLine => {
+          if (processedLines.has(otherLine)) return;
+
+          const ox1 = parseFloat(otherLine.getAttribute('x1'));
+          const oy1 = parseFloat(otherLine.getAttribute('y1'));
+          const ox2 = parseFloat(otherLine.getAttribute('x2'));
+          const oy2 = parseFloat(otherLine.getAttribute('y2'));
+
+          // Check if endpoints touch (with small tolerance)
+          const touches =
+            (Math.abs(x1 - ox1) < SEQ_CONSTANTS.TOLERANCE && Math.abs(y1 - oy1) < SEQ_CONSTANTS.TOLERANCE) ||
+            (Math.abs(x1 - ox2) < SEQ_CONSTANTS.TOLERANCE && Math.abs(y1 - oy2) < SEQ_CONSTANTS.TOLERANCE) ||
+            (Math.abs(x2 - ox1) < SEQ_CONSTANTS.TOLERANCE && Math.abs(y2 - oy1) < SEQ_CONSTANTS.TOLERANCE) ||
+            (Math.abs(x2 - ox2) < SEQ_CONSTANTS.TOLERANCE && Math.abs(y2 - oy2) < SEQ_CONSTANTS.TOLERANCE);
+
+          if (touches) {
+            stack.push(otherLine);
+          }
+        });
       }
-
-      loops.push({ xMin, xMax, yMin, yMax, text: loopText });
-      console.log("Found loop:", loopText, "from y", yMin, "to", yMax); // DEBUG
     }
 
-    // 6. Generate Mermaid code
+    loopLines.forEach(line => {
+      if (!processedLines.has(line)) {
+        const group = [];
+        findConnectedLines(line, group);
+
+        // A valid block box should have at least 4 lines
+        if (group.length >= 4) {
+          const xs = group.map(l => [parseFloat(l.getAttribute('x1')), parseFloat(l.getAttribute('x2'))]).flat();
+          const ys = group.map(l => [parseFloat(l.getAttribute('y1')), parseFloat(l.getAttribute('y2'))]).flat();
+
+          const xMin = Math.min(...xs);
+          const xMax = Math.max(...xs);
+          const yMin = Math.min(...ys);
+          const yMax = Math.max(...ys);
+
+          // Find label text associated with this block
+          // Usually inside the block, near top-left
+          let labelText = '';
+          let type = 'loop'; // Default
+          let condition = '';
+
+          // Find all loopText and labelText elements inside this box
+          const textElements = Array.from(svgElement.querySelectorAll('.loopText, .labelText'));
+          const blockTexts = textElements.filter(el => {
+            const tx = parseFloat(el.getAttribute('x'));
+            const ty = parseFloat(el.getAttribute('y'));
+            return tx >= xMin && tx <= xMax && ty >= yMin && ty <= yMax;
+          });
+
+          // Sort by Y then X to get order: Label, [Condition]
+          blockTexts.sort((a, b) => {
+            const ay = parseFloat(a.getAttribute('y'));
+            const by = parseFloat(b.getAttribute('y'));
+            if (Math.abs(ay - by) < SEQ_CONSTANTS.BLOCK_TEXT_Y_MARGIN) {
+              return parseFloat(a.getAttribute('x')) - parseFloat(b.getAttribute('x'));
+            }
+            return ay - by;
+          });
+
+          if (blockTexts.length > 0) {
+            const firstText = blockTexts[0].textContent.trim();
+            // Check if first text is a known block type
+            const knownTypes = ['loop', 'alt', 'opt', 'par', 'critical', 'break', 'rect'];
+            if (knownTypes.includes(firstText)) {
+              type = firstText;
+              // If there is a second text, it's likely the condition
+              if (blockTexts.length > 1) {
+                condition = blockTexts[1].textContent.trim().replace(/^\[|\]$/g, '');
+              }
+            } else {
+              // If not a known type, assume it's the condition for a loop (default)
+              // OR it might be "loop [condition]" split
+              condition = firstText.replace(/^\[|\]$/g, '');
+            }
+          }
+
+          // Check for dividers (dashed lines) inside the block (for alt/par)
+          const dividers = [];
+          if (type === 'alt' || type === 'par') {
+            // Find lines that are dashed and inside the box
+            // We iterate over ALL loopLines to find those that are geometrically inside this block
+            loopLines.forEach(l => {
+              // Skip if this line is part of the border group (optimization, though strictly not necessary if we check bounds)
+              // Actually, border lines are solid, dividers are dashed.
+
+              const style = l.getAttribute('style') || '';
+              const isDashed = style.includes('stroke-dasharray') || l.getAttribute('stroke-dasharray');
+
+              if (!isDashed) return;
+
+              const ly1 = parseFloat(l.getAttribute('y1'));
+              const ly2 = parseFloat(l.getAttribute('y2'));
+              const lx1 = parseFloat(l.getAttribute('x1'));
+              const lx2 = parseFloat(l.getAttribute('x2'));
+
+              // Check if it's a horizontal line
+              if (Math.abs(ly1 - ly2) < 1) {
+                // Check if it is strictly inside the vertical bounds of the block
+                if (ly1 > yMin + SEQ_CONSTANTS.BLOCK_DIVIDER_Y_MARGIN && ly1 < yMax - SEQ_CONSTANTS.BLOCK_DIVIDER_Y_MARGIN) {
+                  // Check if it is within the horizontal bounds (allowing some tolerance or full width)
+                  // Usually dividers span the full width or close to it
+                  if (Math.min(lx1, lx2) >= xMin - SEQ_CONSTANTS.BLOCK_DIVIDER_Y_MARGIN && Math.max(lx1, lx2) <= xMax + SEQ_CONSTANTS.BLOCK_DIVIDER_Y_MARGIN) {
+                    // It's a divider
+                    // Find the condition text for this else block
+                    // The text should be just below this line
+                    let elseCondition = '';
+                    const elseText = blockTexts.find(t => {
+                      const ty = parseFloat(t.getAttribute('y'));
+                      return ty > ly1 && ty < ly1 + SEQ_CONSTANTS.BLOCK_DIVIDER_LOOKAHEAD; // Look within 40px below divider
+                    });
+                    if (elseText) {
+                      elseCondition = elseText.textContent.trim().replace(/^\[|\]$/g, '');
+                    }
+                    dividers.push({ y: ly1, condition: elseCondition });
+                  }
+                }
+              }
+            });
+            dividers.sort((a, b) => a.y - b.y);
+          }
+
+          blocks.push({ xMin, xMax, yMin, yMax, type, condition, dividers });
+          console.log(`Found block: ${type} [${condition}] from y ${yMin} to ${yMax}, dividers: ${dividers.length}`); // DEBUG
+        }
+      }
+    });
+    return blocks;
+  }
+
+  function generateMermaidCode(uniqueParticipants, messages, notes, blocks) {
     let mermaidOutput = "sequenceDiagram\n";
 
     // Add participants
@@ -1199,7 +1357,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     });
     mermaidOutput += "\n";
 
-    // Sort all events by y coordinate (messages, notes, loops)
+    // Sort all events by y coordinate (messages, notes, blocks)
     const events = [];
 
     messages.forEach(msg => {
@@ -1210,43 +1368,58 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       events.push({ type: 'note', y: note.y, data: note });
     });
 
-    loops.forEach(loop => {
-      events.push({ type: 'loop_start', y: loop.yMin - 1, data: loop });
-      events.push({ type: 'loop_end', y: loop.yMax + 1, data: loop });
+    blocks.forEach(block => {
+      events.push({ type: 'block_start', y: block.yMin - 1, data: block });
+      // Add divider events
+      if (block.dividers) {
+        block.dividers.forEach(div => {
+          events.push({ type: 'block_divider', y: div.y, data: { ...div, parentType: block.type } });
+        });
+      }
+      events.push({ type: 'block_end', y: block.yMax + 1, data: block });
     });
 
     events.sort((a, b) => a.y - b.y);
 
     // Generate events
-    let loopStack = [];
+    let blockStack = [];
     events.forEach(event => {
-      if (event.type === 'loop_start') {
-        const text = event.data.text ? ` ${event.data.text}` : '';
-        mermaidOutput += `  loop${text}\n`;
-        loopStack.push(event.data);
-      } else if (event.type === 'loop_end') {
-        if (loopStack.length > 0) {
+      if (event.type === 'block_start') {
+        const block = event.data;
+        const condition = block.condition ? ` ${block.condition}` : '';
+        mermaidOutput += `  ${block.type}${condition}\n`;
+        blockStack.push(block);
+      } else if (event.type === 'block_divider') {
+        const div = event.data;
+        const condition = div.condition ? ` ${div.condition}` : '';
+        if (div.parentType === 'alt') {
+          mermaidOutput += `  else${condition}\n`;
+        } else if (div.parentType === 'par') {
+          mermaidOutput += `  and${condition}\n`;
+        } else {
+          mermaidOutput += `  else${condition}\n`; // Default fallback
+        }
+      } else if (event.type === 'block_end') {
+        if (blockStack.length > 0) {
           mermaidOutput += `  end\n`;
-          loopStack.pop();
+          blockStack.pop();
         }
       } else if (event.type === 'note') {
-        const indent = loopStack.length > 0 ? '  ' : '';
+        const indent = blockStack.length > 0 ? '  ' : '';
         mermaidOutput += `${indent}  note over ${event.data.target}: ${event.data.text}\n`;
       } else if (event.type === 'message') {
-        const indent = loopStack.length > 0 ? '  ' : '';
+        const indent = blockStack.length > 0 ? '  ' : '';
         const msg = event.data;
         mermaidOutput += `${indent}  ${msg.from}${msg.arrow}${msg.to}: ${msg.text}\n`;
       }
     });
 
-    // Close remaining loops
-    while (loopStack.length > 0) {
+    // Close remaining blocks
+    while (blockStack.length > 0) {
       mermaidOutput += `  end\n`;
-      loopStack.pop();
+      blockStack.pop();
     }
 
-    if (uniqueParticipants.length === 0 && messages.length === 0) return null;
-    console.log("Sequence diagram conversion completed. Participants:", uniqueParticipants.length, "Messages:", messages.length, "Notes:", notes.length); // DEBUG
     console.log("Generated sequence mermaid code:", mermaidOutput.substring(0, 200) + "..."); // DEBUG
     return '```mermaid\n' + mermaidOutput.trim() + '\n```';
   }
