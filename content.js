@@ -965,10 +965,37 @@ if (!ALLOW_SCRIPT_EXECUTION) {
    * @param {SVGElement} svgElement - The SVG DOM element for the sequence diagram
    * @returns {string|null}
    */
+  // Constants for Sequence Diagram Parsing
+  const SEQ_CONSTANTS = {
+    TOLERANCE: 2,
+    SELF_MESSAGE_DIST: 20,
+    BLOCK_TEXT_Y_MARGIN: 5,
+    BLOCK_DIVIDER_Y_MARGIN: 5,
+    BLOCK_DIVIDER_LOOKAHEAD: 40,
+    NOTE_Y_OFFSET: 1
+  };
+
+  /**
+   * Helper: Convert SVG Sequence Diagram to Mermaid code
+   * @param {SVGElement} svgElement - The SVG DOM element for the sequence diagram
+   * @returns {string|null}
+   */
   function convertSequenceDiagramSvgToMermaidText(svgElement) {
     if (!svgElement) return null;
 
-    // 1. Parse participants 
+    const uniqueParticipants = parseParticipants(svgElement);
+    const notes = parseNotes(svgElement, uniqueParticipants);
+    const messages = parseMessages(svgElement, uniqueParticipants);
+    const blocks = parseBlocks(svgElement);
+
+    if (uniqueParticipants.length === 0 && messages.length === 0) return null;
+
+    console.log("Sequence diagram conversion completed. Participants:", uniqueParticipants.length, "Messages:", messages.length, "Notes:", notes.length); // DEBUG
+
+    return generateMermaidCode(uniqueParticipants, messages, notes, blocks);
+  }
+
+  function parseParticipants(svgElement) {
     const participants = [];
     console.log("Looking for sequence participants..."); // DEBUG
 
@@ -994,8 +1021,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         seenNames.add(p.name);
       }
     });
+    return uniqueParticipants;
+  }
 
-    // 2. Parse Notes
+  function parseNotes(svgElement, uniqueParticipants) {
     const notes = [];
     svgElement.querySelectorAll('g').forEach(g => {
       const noteRect = g.querySelector('rect.note');
@@ -1040,8 +1069,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         }
       }
     });
+    return notes;
+  }
 
-    // 3. Parse message lines and message text
+  function parseMessages(svgElement, uniqueParticipants) {
     const messages = [];
 
     // Collect all message texts
@@ -1088,7 +1119,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           const y2 = parseFloat(endMatch[2]);
 
           // Check if it's a self message (start and end x coordinates are close)
-          if (Math.abs(x1 - x2) < 20) { // Allow some margin of error
+          if (Math.abs(x1 - x2) < SEQ_CONSTANTS.SELF_MESSAGE_DIST) {
             messageLines.push({
               x1, y1, x2, y2, isDashed,
               isSelfMessage: true
@@ -1101,7 +1132,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     messageLines.sort((a, b) => a.y1 - b.y1);
     console.log("Found message lines:", messageLines.length); // DEBUG
 
-    // 4. Match message lines and message text
+    // Match message lines and message text
     for (let i = 0; i < Math.min(messageLines.length, messageTexts.length); i++) {
       const line = messageLines[i];
       const messageText = messageTexts[i];
@@ -1161,8 +1192,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         console.log(`Message ${i + 1}: ${fromParticipant} ${arrow} ${toParticipant}: ${messageText.text}`); // DEBUG
       }
     }
+    return messages;
+  }
 
-    // 5. Parse block areas (loop, alt, opt, par, etc.)
+  function parseBlocks(svgElement) {
     const blocks = [];
     const loopLines = Array.from(svgElement.querySelectorAll('line.loopLine'));
 
@@ -1193,12 +1226,11 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           const oy2 = parseFloat(otherLine.getAttribute('y2'));
 
           // Check if endpoints touch (with small tolerance)
-          const tolerance = 2;
           const touches =
-            (Math.abs(x1 - ox1) < tolerance && Math.abs(y1 - oy1) < tolerance) ||
-            (Math.abs(x1 - ox2) < tolerance && Math.abs(y1 - oy2) < tolerance) ||
-            (Math.abs(x2 - ox1) < tolerance && Math.abs(y2 - oy1) < tolerance) ||
-            (Math.abs(x2 - ox2) < tolerance && Math.abs(y2 - oy2) < tolerance);
+            (Math.abs(x1 - ox1) < SEQ_CONSTANTS.TOLERANCE && Math.abs(y1 - oy1) < SEQ_CONSTANTS.TOLERANCE) ||
+            (Math.abs(x1 - ox2) < SEQ_CONSTANTS.TOLERANCE && Math.abs(y1 - oy2) < SEQ_CONSTANTS.TOLERANCE) ||
+            (Math.abs(x2 - ox1) < SEQ_CONSTANTS.TOLERANCE && Math.abs(y2 - oy1) < SEQ_CONSTANTS.TOLERANCE) ||
+            (Math.abs(x2 - ox2) < SEQ_CONSTANTS.TOLERANCE && Math.abs(y2 - oy2) < SEQ_CONSTANTS.TOLERANCE);
 
           if (touches) {
             stack.push(otherLine);
@@ -1240,7 +1272,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           blockTexts.sort((a, b) => {
             const ay = parseFloat(a.getAttribute('y'));
             const by = parseFloat(b.getAttribute('y'));
-            if (Math.abs(ay - by) < 5) {
+            if (Math.abs(ay - by) < SEQ_CONSTANTS.BLOCK_TEXT_Y_MARGIN) {
               return parseFloat(a.getAttribute('x')) - parseFloat(b.getAttribute('x'));
             }
             return ay - by;
@@ -1285,17 +1317,17 @@ if (!ALLOW_SCRIPT_EXECUTION) {
               // Check if it's a horizontal line
               if (Math.abs(ly1 - ly2) < 1) {
                 // Check if it is strictly inside the vertical bounds of the block
-                if (ly1 > yMin + 5 && ly1 < yMax - 5) {
+                if (ly1 > yMin + SEQ_CONSTANTS.BLOCK_DIVIDER_Y_MARGIN && ly1 < yMax - SEQ_CONSTANTS.BLOCK_DIVIDER_Y_MARGIN) {
                   // Check if it is within the horizontal bounds (allowing some tolerance or full width)
                   // Usually dividers span the full width or close to it
-                  if (Math.min(lx1, lx2) >= xMin - 5 && Math.max(lx1, lx2) <= xMax + 5) {
+                  if (Math.min(lx1, lx2) >= xMin - SEQ_CONSTANTS.BLOCK_DIVIDER_Y_MARGIN && Math.max(lx1, lx2) <= xMax + SEQ_CONSTANTS.BLOCK_DIVIDER_Y_MARGIN) {
                     // It's a divider
                     // Find the condition text for this else block
                     // The text should be just below this line
                     let elseCondition = '';
                     const elseText = blockTexts.find(t => {
                       const ty = parseFloat(t.getAttribute('y'));
-                      return ty > ly1 && ty < ly1 + 40; // Look within 40px below divider
+                      return ty > ly1 && ty < ly1 + SEQ_CONSTANTS.BLOCK_DIVIDER_LOOKAHEAD; // Look within 40px below divider
                     });
                     if (elseText) {
                       elseCondition = elseText.textContent.trim().replace(/^\[|\]$/g, '');
@@ -1313,8 +1345,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         }
       }
     });
+    return blocks;
+  }
 
-    // 6. Generate Mermaid code
+  function generateMermaidCode(uniqueParticipants, messages, notes, blocks) {
     let mermaidOutput = "sequenceDiagram\n";
 
     // Add participants
@@ -1386,8 +1420,6 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       blockStack.pop();
     }
 
-    if (uniqueParticipants.length === 0 && messages.length === 0) return null;
-    console.log("Sequence diagram conversion completed. Participants:", uniqueParticipants.length, "Messages:", messages.length, "Notes:", notes.length); // DEBUG
     console.log("Generated sequence mermaid code:", mermaidOutput.substring(0, 200) + "..."); // DEBUG
     return '```mermaid\n' + mermaidOutput.trim() + '\n```';
   }
