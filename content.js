@@ -1172,34 +1172,39 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     const processedLines = new Set();
 
     function findConnectedLines(startLine, currentGroup) {
-      processedLines.add(startLine);
-      currentGroup.push(startLine);
+      const stack = [startLine];
+      while (stack.length > 0) {
+        const line = stack.pop();
+        if (processedLines.has(line)) continue;
+        processedLines.add(line);
+        currentGroup.push(line);
 
-      const x1 = parseFloat(startLine.getAttribute('x1'));
-      const y1 = parseFloat(startLine.getAttribute('y1'));
-      const x2 = parseFloat(startLine.getAttribute('x2'));
-      const y2 = parseFloat(startLine.getAttribute('y2'));
+        const x1 = parseFloat(line.getAttribute('x1'));
+        const y1 = parseFloat(line.getAttribute('y1'));
+        const x2 = parseFloat(line.getAttribute('x2'));
+        const y2 = parseFloat(line.getAttribute('y2'));
 
-      loopLines.forEach(otherLine => {
-        if (processedLines.has(otherLine)) return;
+        loopLines.forEach(otherLine => {
+          if (processedLines.has(otherLine)) return;
 
-        const ox1 = parseFloat(otherLine.getAttribute('x1'));
-        const oy1 = parseFloat(otherLine.getAttribute('y1'));
-        const ox2 = parseFloat(otherLine.getAttribute('x2'));
-        const oy2 = parseFloat(otherLine.getAttribute('y2'));
+          const ox1 = parseFloat(otherLine.getAttribute('x1'));
+          const oy1 = parseFloat(otherLine.getAttribute('y1'));
+          const ox2 = parseFloat(otherLine.getAttribute('x2'));
+          const oy2 = parseFloat(otherLine.getAttribute('y2'));
 
-        // Check if endpoints touch (with small tolerance)
-        const tolerance = 2;
-        const touches =
-          (Math.abs(x1 - ox1) < tolerance && Math.abs(y1 - oy1) < tolerance) ||
-          (Math.abs(x1 - ox2) < tolerance && Math.abs(y1 - oy2) < tolerance) ||
-          (Math.abs(x2 - ox1) < tolerance && Math.abs(y2 - oy1) < tolerance) ||
-          (Math.abs(x2 - ox2) < tolerance && Math.abs(y2 - oy2) < tolerance);
+          // Check if endpoints touch (with small tolerance)
+          const tolerance = 2;
+          const touches =
+            (Math.abs(x1 - ox1) < tolerance && Math.abs(y1 - oy1) < tolerance) ||
+            (Math.abs(x1 - ox2) < tolerance && Math.abs(y1 - oy2) < tolerance) ||
+            (Math.abs(x2 - ox1) < tolerance && Math.abs(y2 - oy1) < tolerance) ||
+            (Math.abs(x2 - ox2) < tolerance && Math.abs(y2 - oy2) < tolerance);
 
-        if (touches) {
-          findConnectedLines(otherLine, currentGroup);
-        }
-      });
+          if (touches) {
+            stack.push(otherLine);
+          }
+        });
+      }
     }
 
     loopLines.forEach(line => {
