@@ -164,6 +164,38 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     // Always return true for asynchronous sendResponse handling
     return true;
   });
+
+  // Helper: Extract lines of text from an element, handling tspans and other children
+  function extractLinesFromTextElement(element) {
+    const lines = [];
+    let textExtractedFromChildren = false;
+
+    element.childNodes.forEach(child => {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        const tagName = child.tagName.toUpperCase();
+        if (['TSPAN', 'DIV', 'P', 'SPAN'].includes(tagName)) {
+          const t = child.textContent.trim();
+          if (t) {
+            lines.push(t);
+            textExtractedFromChildren = true;
+          }
+        }
+      } else if (child.nodeType === Node.TEXT_NODE) {
+        const t = child.textContent.trim();
+        if (t) {
+          lines.push(t);
+          textExtractedFromChildren = true;
+        }
+      }
+    });
+
+    if (!textExtractedFromChildren) {
+      const t = element.textContent.trim();
+      if (t) lines.push(t);
+    }
+    return lines;
+  }
+
   // Helper: Convert Flowchart SVG to Mermaid text (Index-Based Matching)
   function convertFlowchartSvgToMermaidText(svgElement) {
     if (!svgElement) return null;
@@ -319,36 +351,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       const bbox = labelEl.getBoundingClientRect();
 
       // Robust Hybrid Parsing for Edge Labels
-      let lines = [];
       // Try to find the inner container (foreignObject div/p/span) or use the labelEl itself
       const textContainer = labelEl.querySelector('foreignObject span, foreignObject div, foreignObject p') || labelEl;
 
-      let textExtractedFromChildren = false;
-      textContainer.childNodes.forEach(child => {
-        // Check for element nodes that might contain text (tspan, div, p, span)
-        if (child.nodeType === Node.ELEMENT_NODE &&
-          (child.tagName === 'tspan' || child.tagName === 'TSPAN' ||
-            child.tagName === 'div' || child.tagName === 'p' ||
-            child.tagName === 'span' || child.tagName === 'SPAN')) {
-          const t = child.textContent.trim();
-          if (t) {
-            lines.push(t);
-            textExtractedFromChildren = true;
-          }
-        } else if (child.nodeType === Node.TEXT_NODE) {
-          const t = child.textContent.trim();
-          if (t) {
-            lines.push(t);
-            textExtractedFromChildren = true;
-          }
-        }
-      });
-
-      // Fallback: If no content was extracted from children, use textContent
-      if (!textExtractedFromChildren) {
-        const t = textContainer.textContent.trim();
-        if (t) lines.push(t);
-      }
+      const lines = extractLinesFromTextElement(textContainer);
 
       let labelText = lines.join('<br/>');
 
@@ -460,10 +466,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
             const startDist = getDistanceToBox(startPoint.x, startPoint.y, bbox);
             const endDist = getDistanceToBox(endPoint.x, endPoint.y, bbox);
 
-            if (distStart < minStartDist) {
-              minStartDist = distStart;
+            if (startDist < minStartDist) {
+              minStartDist = startDist;
               nearestSource = element;
-            } else if (distStart === minStartDist && distStart === 0 && nearestSource && element.type !== 'cluster') {
+            } else if (startDist === minStartDist && startDist === 0 && nearestSource && element.type !== 'cluster') {
               // Tie-breaker: If both are 0 (inside/boundary), prefer the one closer to center
               const centerCurrent = getCenter(nearestSource.bbox);
               const centerCandidate = getCenter(element.bbox);
@@ -474,10 +480,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
               }
             }
 
-            if (distEnd < minEndDist) {
-              minEndDist = distEnd;
+            if (endDist < minEndDist) {
+              minEndDist = endDist;
               nearestTarget = element;
-            } else if (distEnd === minEndDist && distEnd === 0 && nearestTarget && element.type !== 'cluster') {
+            } else if (endDist === minEndDist && endDist === 0 && nearestTarget && element.type !== 'cluster') {
               // Tie-breaker: If both are 0 (inside/boundary), prefer the one closer to center
               const centerCurrent = getCenter(nearestTarget.bbox);
               const centerCandidate = getCenter(element.bbox);
@@ -742,8 +748,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       if (transform) {
         const match = transform.match(/translate\(([^,]+),\s*([^)]+)\)/);
         if (match) {
-          cx = parseFloat(match[1]);
-          cy = parseFloat(match[2]);
+          const px = parseFloat(match[1]);
+          const py = parseFloat(match[2]);
+          if (!isNaN(px)) cx = px;
+          if (!isNaN(py)) cy = py;
         }
       }
       const pathForBounds = node.querySelector('g.basic.label-container > path[d^="M-"]');
@@ -751,8 +759,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         const d = pathForBounds.getAttribute('d');
         const dMatch = d.match(/M-([0-9.]+)\s+-([0-9.]+)/); // Extracts W and H from M-W -H
         if (dMatch && dMatch.length >= 3) {
-          halfWidth = parseFloat(dMatch[1]);
-          halfHeight = parseFloat(dMatch[2]);
+          const w = parseFloat(dMatch[1]);
+          const h = parseFloat(dMatch[2]);
+          if (!isNaN(w)) halfWidth = w;
+          if (!isNaN(h)) halfHeight = h;
         }
       }
 
@@ -795,31 +805,8 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         // Hybrid Approach: Try to find tspans. If none, use textContent.
         const lines = [];
         noteTextElements.forEach(textEl => {
-          let textExtractedFromChildren = false;
-          textEl.childNodes.forEach(child => {
-            if (child.nodeType === Node.ELEMENT_NODE && (child.tagName === 'tspan' || child.tagName === 'TSPAN')) {
-              const t = child.textContent.trim();
-              if (t) {
-                lines.push(t);
-                textExtractedFromChildren = true;
-              }
-            } else if (child.nodeType === Node.TEXT_NODE) {
-              // Also capture direct text nodes if mixed with tspans (less common but possible)
-              const t = child.textContent.trim();
-              if (t) {
-                lines.push(t);
-                // If we found text nodes, we consider content extracted.
-                textExtractedFromChildren = true;
-              }
-            }
-          });
-
-          // Fallback: If no content was extracted from children for THIS element,
-          // use the raw textContent of the element.
-          if (!textExtractedFromChildren) {
-            const t = textEl.textContent.trim();
-            if (t) lines.push(t);
-          }
+          const elLines = extractLinesFromTextElement(textEl);
+          lines.push(...elLines);
         });
 
         const text = lines.join('<br/>');
@@ -1308,31 +1295,8 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         // Hybrid Approach: Try to find tspans. If none, use textContent.
         const lines = [];
         noteTextElements.forEach(textEl => {
-          let textExtractedFromChildren = false;
-          textEl.childNodes.forEach(child => {
-            if (child.nodeType === Node.ELEMENT_NODE && (child.tagName === 'tspan' || child.tagName === 'TSPAN')) {
-              const t = child.textContent.trim();
-              if (t) {
-                lines.push(t);
-                textExtractedFromChildren = true;
-              }
-            } else if (child.nodeType === Node.TEXT_NODE) {
-              // Also capture direct text nodes if mixed with tspans (less common but possible)
-              const t = child.textContent.trim();
-              if (t) {
-                lines.push(t);
-                // If we found text nodes, we consider content extracted.
-                textExtractedFromChildren = true;
-              }
-            }
-          });
-
-          // Fallback: If no content was extracted from children for THIS element,
-          // use the raw textContent of the element.
-          if (!textExtractedFromChildren) {
-            const t = textEl.textContent.trim();
-            if (t) lines.push(t);
-          }
+          const elLines = extractLinesFromTextElement(textEl);
+          lines.push(...elLines);
         });
 
         const text = lines.join('<br/>');
@@ -1423,14 +1387,16 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           const x2 = parseFloat(endMatch[1]);
           const y2 = parseFloat(endMatch[2]);
 
-          // Check if it's a self message (start and end x coordinates are close)
-          // Increased tolerance for wider self-loops
-          const isSelfMessage = Math.abs(x1 - x2) < 100;
+          if (!isNaN(x1) && !isNaN(y1) && !isNaN(x2) && !isNaN(y2)) {
+            // Check if it's a self message (start and end x coordinates are close)
+            // Increased tolerance for wider self-loops
+            const isSelfMessage = Math.abs(x1 - x2) < 100;
 
-          messageLines.push({
-            x1, y1, x2, y2, isDashed,
-            isSelfMessage
-          });
+            messageLines.push({
+              x1, y1, x2, y2, isDashed,
+              isSelfMessage
+            });
+          }
         }
       }
     });
