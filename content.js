@@ -164,6 +164,38 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     // Always return true for asynchronous sendResponse handling
     return true;
   });
+
+  // Helper: Extract lines of text from an element, handling tspans and other children
+  function extractLinesFromTextElement(element) {
+    const lines = [];
+    let textExtractedFromChildren = false;
+
+    element.childNodes.forEach(child => {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        const tagName = child.tagName.toUpperCase();
+        if (['TSPAN', 'DIV', 'P', 'SPAN'].includes(tagName)) {
+          const t = child.textContent.trim();
+          if (t) {
+            lines.push(t);
+            textExtractedFromChildren = true;
+          }
+        }
+      } else if (child.nodeType === Node.TEXT_NODE) {
+        const t = child.textContent.trim();
+        if (t) {
+          lines.push(t);
+          textExtractedFromChildren = true;
+        }
+      }
+    });
+
+    if (!textExtractedFromChildren) {
+      const t = element.textContent.trim();
+      if (t) lines.push(t);
+    }
+    return lines;
+  }
+
   // Helper: Convert Flowchart SVG to Mermaid text (Index-Based Matching)
   function convertFlowchartSvgToMermaidText(svgElement) {
     if (!svgElement) return null;
@@ -317,14 +349,15 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     // Map labels to their centers
     const labelData = labelElements.map(labelEl => {
       const bbox = labelEl.getBoundingClientRect();
-      // Extract text content
-      let labelText = "";
-      const foreignObj = labelEl.querySelector('foreignObject span, foreignObject div, foreignObject p');
-      if (foreignObj) {
-        labelText = foreignObj.textContent?.trim();
-      } else {
-        labelText = labelEl.textContent?.trim();
-      }
+
+      // Robust Hybrid Parsing for Edge Labels
+      // Try to find the inner container (foreignObject div/p/span) or use the labelEl itself
+      const textContainer = labelEl.querySelector('foreignObject span, foreignObject div, foreignObject p') || labelEl;
+
+      const lines = extractLinesFromTextElement(textContainer);
+
+      let labelText = lines.join('<br/>');
+
       return {
         element: labelEl,
         center: getCenter(bbox),
@@ -367,12 +400,23 @@ if (!ALLOW_SCRIPT_EXECUTION) {
             if (charAtJ === '-' || charAtJ === '_') {
               const s_clean = core.substring(0, j);
               const t_clean = core.substring(j + 1);
-              const sourceNode = Object.values(nodes).find(n => n.mermaidId === s_clean);
-              const targetNode = Object.values(nodes).find(n => n.mermaidId === t_clean);
+              const sourceNode = Object.values(allElements).find(el => el.mermaidId === s_clean);
+              const targetNode = Object.values(allElements).find(el => el.mermaidId === t_clean);
               if (sourceNode && targetNode) {
-                sourceId = s_clean;
-                targetId = t_clean;
-                break;
+                // Fix: If the ID match points to a Cluster, reject it!
+                // We want to find the specific Node inside the cluster.
+                // Strategy 1 (ID) is too coarse if it picks the container.
+                // Strategy 2 (Geometric) has strict logic to prioritize nodes.
+                if (sourceNode.type === 'cluster' || targetNode.type === 'cluster') {
+                  if (DEBUG_MODE) console.log(`[Mermaid Debug] Strategy 1 found Cluster (${sourceNode.type === 'cluster' ? sourceNode.mermaidId : targetNode.mermaidId}), rejecting to force Geometric match.`);
+                  sourceId = null;
+                  targetId = null;
+                  break;
+                } else {
+                  sourceId = s_clean;
+                  targetId = t_clean;
+                  break;
+                }
               }
             }
           }
@@ -425,12 +469,110 @@ if (!ALLOW_SCRIPT_EXECUTION) {
             if (startDist < minStartDist) {
               minStartDist = startDist;
               nearestSource = element;
+            } else if (startDist === minStartDist && startDist === 0 && nearestSource && element.type !== 'cluster') {
+              // Tie-breaker: If both are 0 (inside/boundary), prefer the one closer to center
+              const centerCurrent = getCenter(nearestSource.bbox);
+              const centerCandidate = getCenter(element.bbox);
+              const d1 = getDistance(startPoint, centerCurrent);
+              const d2 = getDistance(startPoint, centerCandidate);
+              if (d2 < d1) {
+                nearestSource = element;
+              }
             }
+
             if (endDist < minEndDist) {
               minEndDist = endDist;
               nearestTarget = element;
+            } else if (endDist === minEndDist && endDist === 0 && nearestTarget && element.type !== 'cluster') {
+              // Tie-breaker: If both are 0 (inside/boundary), prefer the one closer to center
+              const centerCurrent = getCenter(nearestTarget.bbox);
+              const centerCandidate = getCenter(element.bbox);
+              const d1 = getDistance(endPoint, centerCurrent);
+              const d2 = getDistance(endPoint, centerCandidate);
+              if (d2 < d1) {
+                nearestTarget = element;
+              }
             }
           });
+
+          // FORCE NODE FALLBACK
+          // If we selected a Cluster, check if there is a Node nearby (within 300px).
+          // If so, FORCE the Node. This is a safety net for when Cluster Penalty fails or BBoxes are weird.
+          const FALLBACK_THRESHOLD = 300; // Increased from 100 to 300
+
+          // Special Case: Self-Loop on a Cluster -> Drill down to Node
+          if (nearestSource && nearestTarget && nearestSource === nearestTarget && nearestSource.type === 'cluster') {
+            let bestNode = null;
+            let bestNodeDist = Infinity;
+            Object.values(allElements).forEach(el => {
+              if (el.type === 'node' && el.bbox) {
+                const d = getDistanceToBox(startPoint.x, startPoint.y, el.bbox);
+                if (d < bestNodeDist) {
+                  bestNodeDist = d;
+                  bestNode = el;
+                }
+              }
+            });
+
+            // If we found a node reasonably close (e.g. inside the cluster), use it for BOTH
+            if (bestNode && bestNodeDist < FALLBACK_THRESHOLD) {
+              if (DEBUG_MODE) console.log(`[Mermaid Debug] Self-Loop Cluster Fix: Swapping Cluster ${nearestSource.mermaidId} for Node ${bestNode.mermaidId}`);
+              nearestSource = bestNode;
+              nearestTarget = bestNode;
+              minStartDist = bestNodeDist;
+              minEndDist = bestNodeDist; // Assume end is also close enough
+            }
+          }
+
+          if (nearestSource && nearestSource.type === 'cluster') {
+            let bestNode = null;
+            let bestNodeDist = Infinity;
+            Object.values(allElements).forEach(el => {
+              if (el.type === 'node' && el.bbox) {
+                const d = getDistanceToBox(startPoint.x, startPoint.y, el.bbox);
+                if (d < bestNodeDist) {
+                  bestNodeDist = d;
+                  bestNode = el;
+                }
+              }
+            });
+
+            if (DEBUG_MODE) {
+              console.log(`[Mermaid Debug] Cluster Selected (Source): ${nearestSource.mermaidId}. Nearest Node: ${bestNode?.mermaidId} (Dist: ${Math.round(bestNodeDist)})`);
+            }
+
+            // If a node is within threshold, take it!
+            if (bestNode && bestNodeDist < FALLBACK_THRESHOLD) {
+              if (DEBUG_MODE) console.log(`[Mermaid Debug] Force Node Fallback (Source): Swapping Cluster ${nearestSource.mermaidId} for Node ${bestNode.mermaidId} (Dist: ${Math.round(bestNodeDist)})`);
+              nearestSource = bestNode;
+              minStartDist = bestNodeDist;
+            }
+          }
+
+          if (nearestTarget && nearestTarget.type === 'cluster') {
+            let bestNode = null;
+            let bestNodeDist = Infinity;
+            Object.values(allElements).forEach(el => {
+              if (el.type === 'node' && el.bbox) {
+                const d = getDistanceToBox(endPoint.x, endPoint.y, el.bbox);
+                if (d < bestNodeDist) {
+                  bestNodeDist = d;
+                  bestNode = el;
+                }
+              }
+            });
+
+            if (DEBUG_MODE) {
+              console.log(`[Mermaid Debug] Cluster Selected (Target): ${nearestTarget.mermaidId}. Nearest Node: ${bestNode?.mermaidId} (Dist: ${Math.round(bestNodeDist)})`);
+            }
+
+            // If a node is within threshold, take it!
+            if (bestNode && bestNodeDist < FALLBACK_THRESHOLD) {
+              if (DEBUG_MODE) console.log(`[Mermaid Debug] Force Node Fallback (Target): Swapping Cluster ${nearestTarget.mermaidId} for Node ${bestNode.mermaidId} (Dist: ${Math.round(bestNodeDist)})`);
+              nearestTarget = bestNode;
+              minEndDist = bestNodeDist;
+            }
+          }
 
           // Threshold check (e.g. 200px is generous but safe for most diagrams)
           const MAX_DISTANCE_THRESHOLD = 200;
@@ -466,6 +608,11 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       if (!sourceNode || !targetNode) {
         if (DEBUG_MODE) console.debug(`[Mermaid Debug] Matched IDs but nodes not found: Source=${sourceId}, Target=${targetId}`);
         return;
+      }
+
+      // Debug Self-Loops
+      if (sourceId === targetId) {
+        if (DEBUG_MODE) console.log(`[Mermaid Debug] Self-loop detected for ${sourceId}. Processing...`);
       }
 
       // --- Label Matching Logic ---
@@ -601,8 +748,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       if (transform) {
         const match = transform.match(/translate\(([^,]+),\s*([^)]+)\)/);
         if (match) {
-          cx = parseFloat(match[1]);
-          cy = parseFloat(match[2]);
+          const px = parseFloat(match[1]);
+          const py = parseFloat(match[2]);
+          if (!isNaN(px)) cx = px;
+          if (!isNaN(py)) cy = py;
         }
       }
       const pathForBounds = node.querySelector('g.basic.label-container > path[d^="M-"]');
@@ -610,8 +759,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         const d = pathForBounds.getAttribute('d');
         const dMatch = d.match(/M-([0-9.]+)\s+-([0-9.]+)/); // Extracts W and H from M-W -H
         if (dMatch && dMatch.length >= 3) {
-          halfWidth = parseFloat(dMatch[1]);
-          halfHeight = parseFloat(dMatch[2]);
+          const w = parseFloat(dMatch[1]);
+          const h = parseFloat(dMatch[2]);
+          if (!isNaN(w)) halfWidth = w;
+          if (!isNaN(h)) halfHeight = h;
         }
       }
 
@@ -647,22 +798,33 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     // Method 1: Find traditional rect.note and text.noteText
     svgElement.querySelectorAll('g').forEach(g => {
       const noteRect = g.querySelector('rect.note');
-      const noteText = g.querySelector('text.noteText');
+      const noteTextElements = g.querySelectorAll('text.noteText');
 
-      if (noteRect && noteText) {
-        const text = noteText.textContent.trim();
-        const x = parseFloat(noteRect.getAttribute('x'));
-        const y = parseFloat(noteRect.getAttribute('y'));
-        const width = parseFloat(noteRect.getAttribute('width'));
-        const height = parseFloat(noteRect.getAttribute('height'));
+      if (noteRect && noteTextElements.length > 0) {
+        // Fix: Iterate over all text elements and their children (tspans)
+        // Hybrid Approach: Try to find tspans. If none, use textContent.
+        const lines = [];
+        noteTextElements.forEach(textEl => {
+          const elLines = extractLinesFromTextElement(textEl);
+          lines.push(...elLines);
+        });
 
-        if (text && !isNaN(x) && !isNaN(y)) {
+        const text = lines.join('<br/>');
+        if (text) {
+          // Calculate center of the note for sorting
+          const x = parseFloat(noteRect.getAttribute('x'));
+          const y = parseFloat(noteRect.getAttribute('y'));
+          const width = parseFloat(noteRect.getAttribute('width'));
+          const height = parseFloat(noteRect.getAttribute('height'));
+
           notes.push({
             text: text,
             x: x,
             y: y,
-            width: width || 0,
-            height: height || 0,
+            cx: x + width / 2,
+            cy: y + height / 2,
+            width: width,
+            height: height,
             id: g.id || `note_${notes.length}`
           });
         }
@@ -1126,10 +1288,18 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     const notes = [];
     svgElement.querySelectorAll('g').forEach(g => {
       const noteRect = g.querySelector('rect.note');
-      const noteText = g.querySelector('text.noteText');
+      const noteTextElements = g.querySelectorAll('text.noteText'); // Changed to querySelectorAll
 
-      if (noteRect && noteText) {
-        const text = noteText.textContent.trim();
+      if (noteRect && noteTextElements.length > 0) {
+        // Fix: Iterate over all text elements and their children (tspans)
+        // Hybrid Approach: Try to find tspans. If none, use textContent.
+        const lines = [];
+        noteTextElements.forEach(textEl => {
+          const elLines = extractLinesFromTextElement(textEl);
+          lines.push(...elLines);
+        });
+
+        const text = lines.join('<br/>');
         const x = parseFloat(noteRect.getAttribute('x'));
         const width = parseFloat(noteRect.getAttribute('width'));
         const leftX = x;
@@ -1217,14 +1387,16 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           const x2 = parseFloat(endMatch[1]);
           const y2 = parseFloat(endMatch[2]);
 
-          // Check if it's a self message (start and end x coordinates are close)
-          // Increased tolerance for wider self-loops
-          const isSelfMessage = Math.abs(x1 - x2) < 100;
+          if (!isNaN(x1) && !isNaN(y1) && !isNaN(x2) && !isNaN(y2)) {
+            // Check if it's a self message (start and end x coordinates are close)
+            // Increased tolerance for wider self-loops
+            const isSelfMessage = Math.abs(x1 - x2) < 100;
 
-          messageLines.push({
-            x1, y1, x2, y2, isDashed,
-            isSelfMessage
-          });
+            messageLines.push({
+              x1, y1, x2, y2, isDashed,
+              isSelfMessage
+            });
+          }
         }
       }
     });
