@@ -181,10 +181,8 @@ if (!ALLOW_SCRIPT_EXECUTION) {
 
     nodeCandidates.forEach(nodeEl => {
       // Filter out non-nodes (edges, clusters, labels) if they got caught by ID selectors
-      if (nodeEl.classList.contains('edgePath') ||
-        nodeEl.classList.contains('cluster') ||
-        nodeEl.classList.contains('label') ||
-        nodeEl.classList.contains('edgeLabel')) {
+      const excludedClasses = ['edgePath', 'cluster', 'label', 'edgeLabel'];
+      if (excludedClasses.some(cls => nodeEl.classList.contains(cls))) {
         return;
       }
 
@@ -416,8 +414,9 @@ if (!ALLOW_SCRIPT_EXECUTION) {
             console.log(`[Mermaid Debug] Path ${index} coords: Start(${Math.round(startPoint.x)},${Math.round(startPoint.y)}), End(${Math.round(endPoint.x)},${Math.round(endPoint.y)})`);
           }
 
-          Object.values(nodes).forEach(node => {
-            const bbox = node.bbox;
+          Object.values(allElements).forEach(element => {
+            const bbox = element.bbox;
+            if (!bbox) return;
 
             // Use distance to the nearest point on the box (more accurate for large nodes)
             const startDist = getDistanceToBox(startPoint.x, startPoint.y, bbox);
@@ -425,11 +424,11 @@ if (!ALLOW_SCRIPT_EXECUTION) {
 
             if (startDist < minStartDist) {
               minStartDist = startDist;
-              nearestSource = node;
+              nearestSource = element;
             }
             if (endDist < minEndDist) {
               minEndDist = endDist;
-              nearestTarget = node;
+              nearestTarget = element;
             }
           });
 
@@ -461,8 +460,8 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         return;
       }
 
-      const sourceNode = Object.values(nodes).find(n => n.mermaidId === sourceId) || Object.values(clusters).find(c => c.mermaidId === sourceId);
-      const targetNode = Object.values(nodes).find(n => n.mermaidId === targetId) || Object.values(clusters).find(c => c.mermaidId === targetId);
+      const sourceNode = Object.values(allElements).find(el => el.mermaidId === sourceId);
+      const targetNode = Object.values(allElements).find(el => el.mermaidId === targetId);
 
       if (!sourceNode || !targetNode) {
         if (DEBUG_MODE) console.debug(`[Mermaid Debug] Matched IDs but nodes not found: Source=${sourceId}, Target=${targetId}`);
