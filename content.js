@@ -1070,20 +1070,51 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     svgElement.querySelectorAll('text.actor-box').forEach((textEl) => {
       const name = textEl.textContent.trim().replace(/^"|"$/g, ''); // Remove quotes
       const x = parseFloat(textEl.getAttribute('x'));
-      if (DEBUG_MODE) console.log("Found participant:", name, "at x:", x); // DEBUG
+      const y = parseFloat(textEl.getAttribute('y'));
       if (name && !isNaN(x)) {
-        participants.push({ name, x });
+        participants.push({ name, x, y });
       }
     });
 
     if (DEBUG_MODE) console.log("Total participants found:", participants.length); // DEBUG
     participants.sort((a, b) => a.x - b.x);
 
-    // Remove duplicate participants
+    // Merge participants that are vertically aligned (same X)
+    const mergedParticipants = [];
+    if (participants.length > 0) {
+      let currentP = participants[0];
+      for (let i = 1; i < participants.length; i++) {
+        const nextP = participants[i];
+        // If X coordinates are very close, treat as the same participant (multi-line header)
+        // BUT only if Y coordinates are also close (e.g. < 50px).
+        // If Y coordinates are far apart, it's likely a duplicate label at the bottom of the diagram.
+        if (Math.abs(nextP.x - currentP.x) < 5) {
+          if (Math.abs(nextP.y - currentP.y) < 50) {
+            currentP.name += '<br/>' + nextP.name;
+          } else {
+            // Far apart Y, likely duplicate label. Don't merge.
+            // Push currentP, start new group with nextP.
+            // Note: nextP will likely be removed later by seenNames if name is identical.
+            mergedParticipants.push(currentP);
+            currentP = nextP;
+          }
+        } else {
+          mergedParticipants.push(currentP);
+          currentP = nextP;
+        }
+      }
+      mergedParticipants.push(currentP);
+    }
+
+    // Remove duplicate participants and assign IDs
     const uniqueParticipants = [];
     const seenNames = new Set();
-    participants.forEach(p => {
+    let idCounter = 1;
+
+    mergedParticipants.forEach(p => {
       if (!seenNames.has(p.name)) {
+        // Assign a safe ID
+        p.id = `p${idCounter++}`;
         uniqueParticipants.push(p);
         seenNames.add(p.name);
       }
@@ -1095,13 +1126,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     const notes = [];
     svgElement.querySelectorAll('g').forEach(g => {
       const noteRect = g.querySelector('rect.note');
-      const noteTextElements = g.querySelectorAll('text.noteText');
+      const noteText = g.querySelector('text.noteText');
 
-      if (noteRect && noteTextElements.length > 0) {
-        const text = Array.from(noteTextElements)
-          .map(el => el.textContent.trim())
-          .filter(t => t)
-          .join('<br/>');
+      if (noteRect && noteText) {
+        const text = noteText.textContent.trim();
         const x = parseFloat(noteRect.getAttribute('x'));
         const width = parseFloat(noteRect.getAttribute('width'));
         const leftX = x;
@@ -1123,11 +1151,11 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           let noteTarget;
           if (coveredParticipants.length === 1) {
             // Single participant
-            noteTarget = coveredParticipants[0].name;
+            noteTarget = coveredParticipants[0].id;
           } else {
             // Multiple participants, use first and last
-            const firstParticipant = coveredParticipants[0].name;
-            const lastParticipant = coveredParticipants[coveredParticipants.length - 1].name;
+            const firstParticipant = coveredParticipants[0].id;
+            const lastParticipant = coveredParticipants[coveredParticipants.length - 1].id;
             noteTarget = `${firstParticipant},${lastParticipant}`;
           }
 
@@ -1155,6 +1183,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         messageTexts.push({ text, y, x });
       }
     });
+    // Sort texts by Y to help with processing
     messageTexts.sort((a, b) => a.y - b.y);
     if (DEBUG_MODE) console.log("Found message texts:", messageTexts.length); // DEBUG
 
@@ -1172,13 +1201,13 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       }
     });
 
-    // Collect all curved message paths (self messages)
+    // Collect all curved message paths (self messages AND potentially others)
     svgElement.querySelectorAll('path.messageLine0, path.messageLine1').forEach(pathEl => {
       const d = pathEl.getAttribute('d');
       const isDashed = pathEl.classList.contains('messageLine1');
 
       if (d) {
-        // Parse path, check if it's a self message
+        // Parse path
         const moveMatch = d.match(/M\s*([^,\s]+)[,\s]+([^,\s]+)/);
         const endMatch = d.match(/([^,\s]+)[,\s]+([^,\s]+)$/);
 
@@ -1189,12 +1218,13 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           const y2 = parseFloat(endMatch[2]);
 
           // Check if it's a self message (start and end x coordinates are close)
-          if (Math.abs(x1 - x2) < SEQ_CONSTANTS.SELF_MESSAGE_DIST) {
-            messageLines.push({
-              x1, y1, x2, y2, isDashed,
-              isSelfMessage: true
-            });
-          }
+          // Increased tolerance for wider self-loops
+          const isSelfMessage = Math.abs(x1 - x2) < 100;
+
+          messageLines.push({
+            x1, y1, x2, y2, isDashed,
+            isSelfMessage
+          });
         }
       }
     });
@@ -1202,13 +1232,71 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     messageLines.sort((a, b) => a.y1 - b.y1);
     if (DEBUG_MODE) console.log("Found message lines:", messageLines.length); // DEBUG
 
-    // Match message lines and message text
-    for (let i = 0; i < Math.min(messageLines.length, messageTexts.length); i++) {
-      const line = messageLines[i];
-      const messageText = messageTexts[i];
+    // Match texts to lines using Biased Nearest Neighbor matching
+    // We want to assign text to the line it belongs to.
+    // Usually text is ABOVE the arrow (Next Line).
+    // Sometimes text is BELOW the arrow (Prev Line).
+    // If text is between Line A and Line B:
+    // - If it's close to Line B (Next), it's likely Line B's header/payload.
+    // - If it's VERY close to Line A (Prev), it might be Line A's label below.
 
-      let fromParticipant = null;
-      let toParticipant = null;
+    const lineTexts = new Map(); // Map<LineObject, Array<TextObject>>
+    const NEXT_LINE_THRESHOLD = 70; // Max distance to consider belonging to next line (Increased from 40)
+
+    messageTexts.forEach(textObj => {
+      // Find closest line before (prev) and after (next)
+      let prevLine = null;
+      let nextLine = null;
+      let dPrev = Infinity;
+      let dNext = Infinity;
+
+      for (const line of messageLines) {
+        if (line.y1 <= textObj.y) {
+          const dist = textObj.y - line.y1;
+          if (dist < dPrev) {
+            dPrev = dist;
+            prevLine = line;
+          }
+        } else {
+          const dist = line.y1 - textObj.y;
+          if (dist < dNext) {
+            dNext = dist;
+            nextLine = line;
+          }
+        }
+      }
+
+      let assignedLine = null;
+
+      if (nextLine && dNext < NEXT_LINE_THRESHOLD) {
+        // Prefer the next line (standard sequence diagram text position: above the line)
+        // Only assign to previous line if next line is too far (handled by threshold)
+        // or if we strictly want to support "text below line" which is rare and causing issues.
+        assignedLine = nextLine;
+      } else if (prevLine) {
+        // Too far from next line, or no next line. Assign to previous line.
+        assignedLine = prevLine;
+      } else if (nextLine) {
+        // No previous line (text at very top), assign to next line
+        assignedLine = nextLine;
+      }
+
+      if (assignedLine) {
+        if (!lineTexts.has(assignedLine)) {
+          lineTexts.set(assignedLine, []);
+        }
+        lineTexts.get(assignedLine).push(textObj);
+      } else {
+        if (DEBUG_MODE) console.log("Unmatched text:", textObj.text);
+      }
+    });
+
+    // Create messages from lines
+    messageLines.forEach((line, index) => {
+      let fromParticipantId = null;
+      let toParticipantId = null;
+      let fromParticipantName = null;
+      let toParticipantName = null;
 
       if (line.isSelfMessage) {
         // Self message - find participant closest to x1
@@ -1217,7 +1305,8 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           const dist = Math.abs(p.x - line.x1);
           if (dist < minDist) {
             minDist = dist;
-            fromParticipant = toParticipant = p.name;
+            fromParticipantId = toParticipantId = p.id;
+            fromParticipantName = toParticipantName = p.name;
           }
         }
       } else {
@@ -1227,7 +1316,8 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           const dist = Math.abs(p.x - line.x1);
           if (dist < minDist1) {
             minDist1 = dist;
-            fromParticipant = p.name;
+            fromParticipantId = p.id;
+            fromParticipantName = p.name;
           }
         }
 
@@ -1236,12 +1326,13 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           const dist = Math.abs(p.x - line.x2);
           if (dist < minDist2) {
             minDist2 = dist;
-            toParticipant = p.name;
+            toParticipantId = p.id;
+            toParticipantName = p.name;
           }
         }
       }
 
-      if (fromParticipant && toParticipant) {
+      if (fromParticipantId && toParticipantId) {
         // Determine arrow type
         let arrow;
         if (line.isDashed) {
@@ -1250,18 +1341,25 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           arrow = '->>'; // Solid arrow
         }
 
-        messages.push({
-          from: fromParticipant,
-          to: toParticipant,
-          text: messageText.text,
-          arrow: arrow,
-          y: line.y1,
-          isSelfMessage: line.isSelfMessage || false
-        });
+        // Get texts for this line
+        const texts = lineTexts.get(line) || [];
+        // Sort texts by Y to ensure correct order (e.g. header then body)
+        texts.sort((a, b) => a.y - b.y);
+        const combinedText = texts.map(t => t.text).join('<br/>');
 
-        if (DEBUG_MODE) console.log(`Message ${i + 1}: ${fromParticipant} ${arrow} ${toParticipant}: ${messageText.text}`); // DEBUG
+        if (combinedText) {
+          messages.push({
+            from: fromParticipantId,
+            to: toParticipantId,
+            text: combinedText,
+            arrow: arrow,
+            y: line.y1,
+            isSelfMessage: line.isSelfMessage || false
+          });
+          if (DEBUG_MODE) console.log(`Message ${index + 1}: ${fromParticipantName} (${fromParticipantId}) ${arrow} ${toParticipantName} (${toParticipantId}): ${combinedText}`); // DEBUG
+        }
       }
-    }
+    });
     return messages;
   }
 
@@ -1421,9 +1519,21 @@ if (!ALLOW_SCRIPT_EXECUTION) {
   function generateMermaidCode(uniqueParticipants, messages, notes, blocks) {
     let mermaidOutput = "sequenceDiagram\n";
 
-    // Add participants
+    // Helper to escape participant names if they contain special characters
+    const escapeName = (name) => {
+      if (!name) return name;
+      // If name contains colons, or other special chars (except spaces), wrap in quotes
+      // User prefers "Client 1" without quotes, but "key: seat-1" needs quotes.
+      if (/[:;\\(\\)\\[\\]\\{\\}]/.test(name) || name.includes('"')) {
+        return `"${name.replace(/"/g, '')}"`; // Simple escaping: remove existing quotes to avoid breaking
+      }
+      return name;
+    };
+
+    // Add participants with aliases
     uniqueParticipants.forEach(p => {
-      mermaidOutput += `  participant ${p.name}\n`;
+      // Use ID as the internal identifier, and Name as the display label
+      mermaidOutput += `  participant ${p.id} as ${escapeName(p.name)}\n`;
     });
     mermaidOutput += "\n";
 
@@ -1476,10 +1586,13 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         }
       } else if (event.type === 'note') {
         const indent = blockStack.length > 0 ? '  ' : '';
+        // Handle multiple targets (comma separated IDs)
+        // Note: IDs are safe, so no escaping needed for them
         mermaidOutput += `${indent}  note over ${event.data.target}: ${event.data.text}\n`;
       } else if (event.type === 'message') {
         const indent = blockStack.length > 0 ? '  ' : '';
         const msg = event.data;
+        // Use IDs for from/to
         mermaidOutput += `${indent}  ${msg.from}${msg.arrow}${msg.to}: ${msg.text}\n`;
       }
     });
@@ -1810,51 +1923,31 @@ if (!ALLOW_SCRIPT_EXECUTION) {
             const diagramClass = svgElement.getAttribute('class');
 
             if (DEBUG_MODE) console.log("Found SVG in PRE: desc=", diagramTypeDesc, "class=", diagramClass); // DEBUG
-            if (DEBUG_MODE) {
-              if (diagramTypeDesc && diagramTypeDesc.includes('flowchart')) {
-                console.log("Trying to convert flowchart..."); // DEBUG
-                mermaidOutput = convertFlowchartSvgToMermaidText(svgElement);
-              } else if (diagramTypeDesc && diagramTypeDesc.includes('class')) {
-                console.log("Trying to convert class diagram..."); // DEBUG
-                mermaidOutput = convertClassDiagramSvgToMermaidText(svgElement);
-              } else if (diagramTypeDesc && diagramTypeDesc.includes('sequence')) {
-                console.log("Trying to convert sequence diagram..."); // DEBUG
-                mermaidOutput = convertSequenceDiagramSvgToMermaidText(svgElement);
-              } else if (diagramTypeDesc && diagramTypeDesc.includes('stateDiagram')) {
-                console.log("Trying to convert state diagram..."); // DEBUG
-                mermaidOutput = convertStateDiagramSvgToMermaidText(svgElement);
-              } else if (diagramClass && diagramClass.includes('flowchart')) {
-                console.log("Trying to convert flowchart by class..."); // DEBUG
-                mermaidOutput = convertFlowchartSvgToMermaidText(svgElement);
-              } else if (diagramClass && (diagramClass.includes('classDiagram') || diagramClass.includes('class'))) {
-                console.log("Trying to convert class diagram by class..."); // DEBUG
-                mermaidOutput = convertClassDiagramSvgToMermaidText(svgElement);
-              } else if (diagramClass && (diagramClass.includes('sequenceDiagram') || diagramClass.includes('sequence'))) {
-                console.log("Trying to convert sequence diagram by class..."); // DEBUG
-                mermaidOutput = convertSequenceDiagramSvgToMermaidText(svgElement);
-              } else if (diagramClass && (diagramClass.includes('statediagram') || diagramClass.includes('stateDiagram'))) {
-                console.log("Trying to convert state diagram by class..."); // DEBUG
-                mermaidOutput = convertStateDiagramSvgToMermaidText(svgElement);
-              }
-            } else {
-              // Non-debug mode: just call the functions without logging
-              if (diagramTypeDesc && diagramTypeDesc.includes('flowchart')) {
-                mermaidOutput = convertFlowchartSvgToMermaidText(svgElement);
-              } else if (diagramTypeDesc && diagramTypeDesc.includes('class')) {
-                mermaidOutput = convertClassDiagramSvgToMermaidText(svgElement);
-              } else if (diagramTypeDesc && diagramTypeDesc.includes('sequence')) {
-                mermaidOutput = convertSequenceDiagramSvgToMermaidText(svgElement);
-              } else if (diagramTypeDesc && diagramTypeDesc.includes('stateDiagram')) {
-                mermaidOutput = convertStateDiagramSvgToMermaidText(svgElement);
-              } else if (diagramClass && diagramClass.includes('flowchart')) {
-                mermaidOutput = convertFlowchartSvgToMermaidText(svgElement);
-              } else if (diagramClass && (diagramClass.includes('classDiagram') || diagramClass.includes('class'))) {
-                mermaidOutput = convertClassDiagramSvgToMermaidText(svgElement);
-              } else if (diagramClass && (diagramClass.includes('sequenceDiagram') || diagramClass.includes('sequence'))) {
-                mermaidOutput = convertSequenceDiagramSvgToMermaidText(svgElement);
-              } else if (diagramClass && (diagramClass.includes('statediagram') || diagramClass.includes('stateDiagram'))) {
-                mermaidOutput = convertStateDiagramSvgToMermaidText(svgElement);
-              }
+
+            if (diagramTypeDesc && diagramTypeDesc.includes('flowchart')) {
+              if (DEBUG_MODE) console.log("Trying to convert flowchart..."); // DEBUG
+              mermaidOutput = convertFlowchartSvgToMermaidText(svgElement);
+            } else if (diagramTypeDesc && diagramTypeDesc.includes('class')) {
+              if (DEBUG_MODE) console.log("Trying to convert class diagram..."); // DEBUG
+              mermaidOutput = convertClassDiagramSvgToMermaidText(svgElement);
+            } else if (diagramTypeDesc && diagramTypeDesc.includes('sequence')) {
+              if (DEBUG_MODE) console.log("Trying to convert sequence diagram..."); // DEBUG
+              mermaidOutput = convertSequenceDiagramSvgToMermaidText(svgElement);
+            } else if (diagramTypeDesc && diagramTypeDesc.includes('stateDiagram')) {
+              if (DEBUG_MODE) console.log("Trying to convert state diagram..."); // DEBUG
+              mermaidOutput = convertStateDiagramSvgToMermaidText(svgElement);
+            } else if (diagramClass && diagramClass.includes('flowchart')) {
+              if (DEBUG_MODE) console.log("Trying to convert flowchart by class..."); // DEBUG
+              mermaidOutput = convertFlowchartSvgToMermaidText(svgElement);
+            } else if (diagramClass && (diagramClass.includes('classDiagram') || diagramClass.includes('class'))) {
+              if (DEBUG_MODE) console.log("Trying to convert class diagram by class..."); // DEBUG
+              mermaidOutput = convertClassDiagramSvgToMermaidText(svgElement);
+            } else if (diagramClass && (diagramClass.includes('sequenceDiagram') || diagramClass.includes('sequence'))) {
+              if (DEBUG_MODE) console.log("Trying to convert sequence diagram by class..."); // DEBUG
+              mermaidOutput = convertSequenceDiagramSvgToMermaidText(svgElement);
+            } else if (diagramClass && (diagramClass.includes('statediagram') || diagramClass.includes('stateDiagram'))) {
+              if (DEBUG_MODE) console.log("Trying to convert state diagram by class..."); // DEBUG
+              mermaidOutput = convertStateDiagramSvgToMermaidText(svgElement);
             }
 
             if (mermaidOutput) {
