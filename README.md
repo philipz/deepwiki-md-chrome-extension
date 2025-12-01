@@ -6,6 +6,10 @@ A Chrome extension to convert DeepWiki documentation pages to Markdown format fo
 
 [简体中文](./README.zh-CN.md) | [繁體中文](./README.zh-TW.md)
 
+## ☕ Support This Project
+
+<a href="https://buymeacoffee.com/philipz" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+
 ## Overview
 
 This extension helps you save documentation from DeepWiki (https://deepwiki.com) as Markdown files. Perfect for:

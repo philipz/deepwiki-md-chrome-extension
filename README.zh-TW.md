@@ -6,6 +6,10 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
+## ☕ 支持此專案
+
+<a href="https://buymeacoffee.com/philipz" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+
 ## 概述
 
 本擴充功能幫助你將 DeepWiki (https://deepwiki.com) 上的文件儲存為 Markdown 檔案。適用於：
