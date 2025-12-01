@@ -152,12 +152,12 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     } else if (request.action === "pageLoaded") {
       // Page loading complete, batch operation preparation can be handled here
       // No sendResponse needed, as this is a notification from background.js
-      console.log("Page loaded:", window.location.href);
+      if (DEBUG_MODE) console.log("Page loaded:", window.location.href);
       // Always send a response, even if empty, to avoid connection errors
       sendResponse({ received: true });
     } else if (request.action === "tabActivated") {
       // Tab has been activated, possibly after being in bfcache
-      console.log("Tab activated:", window.location.href);
+      if (DEBUG_MODE) console.log("Tab activated:", window.location.href);
       // Acknowledge receipt of message to avoid connection errors
       sendResponse({ received: true });
     }
@@ -168,7 +168,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
   function convertFlowchartSvgToMermaidText(svgElement) {
     if (!svgElement) return null;
 
-    console.log("Converting flowchart SVG to Mermaid with Index-Based Matching...");
+    if (DEBUG_MODE) console.log("Converting flowchart SVG to Mermaid with Index-Based Matching...");
     let mermaidCode = "flowchart TD\n\n";
     const nodes = {};
     const clusters = {};
@@ -176,7 +176,16 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     const allElements = {}; // All nodes and clusters, for easy lookup
 
     // 1. Collect all nodes
-    svgElement.querySelectorAll('g.node').forEach(nodeEl => {
+    // Expanded selectors: g.node is standard, but some versions use g.default or just IDs
+    const nodeCandidates = Array.from(svgElement.querySelectorAll('g.node, g.default, g[id^="flowchart-"], g[id^="mermaid-"]'));
+
+    nodeCandidates.forEach(nodeEl => {
+      // Filter out non-nodes (edges, clusters, labels) if they got caught by ID selectors
+      const excludedClasses = ['edgePath', 'cluster', 'label', 'edgeLabel'];
+      if (excludedClasses.some(cls => nodeEl.classList.contains(cls))) {
+        return;
+      }
+
       const svgId = nodeEl.id;
       if (!svgId) return;
 
@@ -276,10 +285,14 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     // 4. Process edges and labels using Geometric Matching (Nearest Neighbor)
     const edges = [];
 
-    const pathElements = Array.from(svgElement.querySelectorAll('path.flowchart-link'));
-    const labelElements = Array.from(svgElement.querySelectorAll('g.edgeLabel'));
+    // Expanded selectors for edges to support flowchart-v2 and other variants
+    const pathElements = Array.from(svgElement.querySelectorAll('path.flowchart-link, g.edgePath > path, g.edgePaths > path, path.edge-thickness-normal, path[marker-end]'));
+    const labelElements = Array.from(svgElement.querySelectorAll('g.edgeLabel, g.edgeLabels > g.edgeLabel'));
 
-    console.log(`Found ${pathElements.length} paths and ${labelElements.length} labels.`);
+    if (DEBUG_MODE) {
+      console.log(`[Mermaid Debug] Found ${pathElements.length} paths and ${labelElements.length} labels.`);
+      console.log(`[Mermaid Debug] Known nodes:`, Object.keys(nodes));
+    }
 
     // Helper to get center of an element
     function getCenter(bbox) {
@@ -292,6 +305,13 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     // Helper to get distance between two points
     function getDistance(p1, p2) {
       return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+    }
+
+    // Helper to get distance from a point to a box (node)
+    function getDistanceToBox(px, py, bbox) {
+      const dx = Math.max(bbox.left - px, 0, px - bbox.right);
+      const dy = Math.max(bbox.top - py, 0, py - bbox.bottom);
+      return Math.sqrt(dx * dx + dy * dy);
     }
 
     // Map labels to their centers
@@ -314,93 +334,139 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     });
 
     // Process each path
-    pathElements.forEach(path => {
+    pathElements.forEach((path, index) => {
       const pathId = path.id;
-      if (!pathId) return;
 
-      // --- ID Parsing Logic ---
       let sourceId = null;
       let targetId = null;
 
-      // Strategy 1: L_ format (L_source_target_index)
-      let match = pathId.match(/^L_([^_]+)_(.+)_\d+$/);
-      if (match) {
-        sourceId = match[1];
-        targetId = match[2];
-      }
-
-      // Strategy 2: flowchart- format (flowchart-source-target-index)
-      if (!sourceId) {
-        match = pathId.match(/^flowchart-([^-]+)-([^-]+)-\d+$/);
+      // --- Strategy 1: ID Parsing (Legacy & Standard) ---
+      if (pathId) {
+        // L_ format (L_source_target_index)
+        let match = pathId.match(/^L_([^_]+)_(.+)_\d+$/);
         if (match) {
           sourceId = match[1];
           targetId = match[2];
         }
-      }
 
-      // Strategy 3: Robust Fallback (Split and Match)
-      if (!sourceId || !targetId) {
-        let core = pathId.replace(/^(L_|flowchart-)/, '').replace(/[-_]\d+$/, '');
-
-        // Try to split at every possible point
-        for (let j = 1; j < core.length; j++) {
-          const charAtJ = core[j];
-          if (charAtJ === '-' || charAtJ === '_') {
-            const s_clean = core.substring(0, j);
-            const t_clean = core.substring(j + 1);
-
-            // Check against known nodes
-            const sourceNode = Object.values(nodes).find(n => n.mermaidId === s_clean);
-            const targetNode = Object.values(nodes).find(n => n.mermaidId === t_clean);
-
-            if (sourceNode && targetNode) {
-              sourceId = s_clean;
-              targetId = t_clean;
-              break;
-            }
+        // flowchart- format (flowchart-source-target-index)
+        if (!sourceId) {
+          match = pathId.match(/^flowchart-([^-]+)-([^-]+)-\d+$/);
+          if (match) {
+            sourceId = match[1];
+            targetId = match[2];
           }
         }
-      }
 
-      // Strategy 4: Greedy Match (Longest Prefix)
-      if (!sourceId || !targetId) {
-        let core = pathId.replace(/^(L_|flowchart-)/, '').replace(/[-_]\d+$/, '');
-        let bestSource = null;
-        let bestTarget = null;
-
-        for (const nodeSvgId in nodes) {
-          const mId = nodes[nodeSvgId].mermaidId;
-          if (core.startsWith(mId)) {
-            const remainder = core.substring(mId.length);
-            if (remainder.startsWith('-') || remainder.startsWith('_')) {
-              const targetCandidate = remainder.substring(1);
-              const targetNode = Object.values(nodes).find(n => n.mermaidId === targetCandidate);
-              if (targetNode) {
-                if (!bestSource || mId.length > bestSource.length) {
-                  bestSource = mId;
-                  bestTarget = targetCandidate;
-                }
+        // Robust Fallback (Split and Match)
+        if (!sourceId || !targetId) {
+          let core = pathId.replace(/^(L_|flowchart-)/, '').replace(/[-_]\d+$/, '');
+          // Try to split at every possible point
+          for (let j = 1; j < core.length; j++) {
+            const charAtJ = core[j];
+            if (charAtJ === '-' || charAtJ === '_') {
+              const s_clean = core.substring(0, j);
+              const t_clean = core.substring(j + 1);
+              const sourceNode = Object.values(nodes).find(n => n.mermaidId === s_clean);
+              const targetNode = Object.values(nodes).find(n => n.mermaidId === t_clean);
+              if (sourceNode && targetNode) {
+                sourceId = s_clean;
+                targetId = t_clean;
+                break;
               }
             }
           }
         }
-        if (bestSource && bestTarget) {
-          sourceId = bestSource;
-          targetId = bestTarget;
+      }
+
+      // --- Strategy 2: Geometric Matching (Fallback for flowchart-v2 / missing IDs) ---
+      if (!sourceId || !targetId) {
+        // Always try geometric matching if ID parsing failed
+        try {
+          const svg = svgElement.closest('svg') || svgElement;
+          const ptStart = svg.createSVGPoint();
+          const ptEnd = svg.createSVGPoint();
+
+          const totalLength = path.getTotalLength();
+          // Use a small offset for start/end to avoid being exactly on the boundary if that matters,
+          // but usually 0 and totalLength are best.
+          const startPointLocal = path.getPointAtLength(0);
+          const endPointLocal = path.getPointAtLength(totalLength);
+
+          ptStart.x = startPointLocal.x;
+          ptStart.y = startPointLocal.y;
+          ptEnd.x = endPointLocal.x;
+          ptEnd.y = endPointLocal.y;
+
+          // Transform to screen coordinates
+          const globalCTM = path.getScreenCTM();
+          const startPoint = ptStart.matrixTransform(globalCTM);
+          const endPoint = ptEnd.matrixTransform(globalCTM);
+
+          // Find nearest nodes
+          let minStartDist = Infinity;
+          let minEndDist = Infinity;
+          let nearestSource = null;
+          let nearestTarget = null;
+
+          // Log coordinates for debugging
+          if (DEBUG_MODE) {
+            console.log(`[Mermaid Debug] Path ${index} coords: Start(${Math.round(startPoint.x)},${Math.round(startPoint.y)}), End(${Math.round(endPoint.x)},${Math.round(endPoint.y)})`);
+          }
+
+          Object.values(allElements).forEach(element => {
+            const bbox = element.bbox;
+            if (!bbox) return;
+
+            // Use distance to the nearest point on the box (more accurate for large nodes)
+            const startDist = getDistanceToBox(startPoint.x, startPoint.y, bbox);
+            const endDist = getDistanceToBox(endPoint.x, endPoint.y, bbox);
+
+            if (startDist < minStartDist) {
+              minStartDist = startDist;
+              nearestSource = element;
+            }
+            if (endDist < minEndDist) {
+              minEndDist = endDist;
+              nearestTarget = element;
+            }
+          });
+
+          // Threshold check (e.g. 200px is generous but safe for most diagrams)
+          const MAX_DISTANCE_THRESHOLD = 200;
+
+          if (DEBUG_MODE) {
+            console.log(`[Mermaid Debug] Path ${index} Nearest: Source=${nearestSource?.mermaidId} (${Math.round(minStartDist)}px), Target=${nearestTarget?.mermaidId} (${Math.round(minEndDist)}px)`);
+          }
+
+          if (minStartDist < MAX_DISTANCE_THRESHOLD && minEndDist < MAX_DISTANCE_THRESHOLD) {
+            sourceId = nearestSource.mermaidId;
+            targetId = nearestTarget.mermaidId;
+            if (DEBUG_MODE) console.debug(`[Mermaid Debug] Path ${index} Geometric Match: Source=${sourceId} (${Math.round(minStartDist)}px), Target=${targetId} (${Math.round(minEndDist)}px)`);
+          } else {
+            if (DEBUG_MODE) console.debug(`[Mermaid Debug] Path ${index} Geometric Match Failed: Distances too large. Source=${Math.round(minStartDist)}px, Target=${Math.round(minEndDist)}px`);
+          }
+
+        } catch (e) {
+          if (DEBUG_MODE) console.debug(`[Mermaid Debug] Geometric matching failed for path ${index}:`, e);
         }
       }
 
+
       if (!sourceId || !targetId) {
         if (DEBUG_MODE) {
-          console.debug(`Could not parse source/target from path ID: ${pathId}`);
+          console.debug(`[Mermaid Debug] Could not parse source/target from path:`, path);
         }
         return;
       }
 
-      const sourceNode = Object.values(nodes).find(n => n.mermaidId === sourceId);
-      const targetNode = Object.values(nodes).find(n => n.mermaidId === targetId);
+      const sourceNode = Object.values(allElements).find(el => el.mermaidId === sourceId);
+      const targetNode = Object.values(allElements).find(el => el.mermaidId === targetId);
 
-      if (!sourceNode || !targetNode) return;
+      if (!sourceNode || !targetNode) {
+        if (DEBUG_MODE) console.debug(`[Mermaid Debug] Matched IDs but nodes not found: Source=${sourceId}, Target=${targetId}`);
+        return;
+      }
 
       // --- Label Matching Logic ---
       let matchedLabelText = "";
@@ -412,7 +478,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
 
       let closestLabel = null;
       let minDistance = Infinity;
-      const MAX_DISTANCE_THRESHOLD = 100; // Pixels, adjust if needed
+      const MAX_DISTANCE_THRESHOLD = 150; // Pixels, relaxed
 
       labelData.forEach(label => {
         if (label.matched) return; // Skip already matched labels (optional, but good for 1-to-1)
@@ -430,7 +496,8 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       }
 
       // Determine Arrow Type
-      const isDashed = path.classList.contains('dashed') || path.classList.contains('dotted');
+      const isDashed = path.classList.contains('dashed') || path.classList.contains('dotted') ||
+        getComputedStyle(path).strokeDasharray !== 'none'; // Check computed style too
       const arrow = isDashed ? "-.->" : "-->";
 
       const labelPart = matchedLabelText ? `|"${matchedLabelText}"|` : "";
@@ -990,33 +1057,64 @@ if (!ALLOW_SCRIPT_EXECUTION) {
 
     if (uniqueParticipants.length === 0 && messages.length === 0) return null;
 
-    console.log("Sequence diagram conversion completed. Participants:", uniqueParticipants.length, "Messages:", messages.length, "Notes:", notes.length); // DEBUG
+    if (DEBUG_MODE) console.log("Sequence diagram conversion completed. Participants:", uniqueParticipants.length, "Messages:", messages.length, "Notes:", notes.length); // DEBUG
 
     return generateMermaidCode(uniqueParticipants, messages, notes, blocks);
   }
 
   function parseParticipants(svgElement) {
     const participants = [];
-    console.log("Looking for sequence participants..."); // DEBUG
+    if (DEBUG_MODE) console.log("Looking for sequence participants..."); // DEBUG
 
     // Find all participant text elements
     svgElement.querySelectorAll('text.actor-box').forEach((textEl) => {
       const name = textEl.textContent.trim().replace(/^"|"$/g, ''); // Remove quotes
       const x = parseFloat(textEl.getAttribute('x'));
-      console.log("Found participant:", name, "at x:", x); // DEBUG
+      const y = parseFloat(textEl.getAttribute('y'));
       if (name && !isNaN(x)) {
-        participants.push({ name, x });
+        participants.push({ name, x, y });
       }
     });
 
-    console.log("Total participants found:", participants.length); // DEBUG
+    if (DEBUG_MODE) console.log("Total participants found:", participants.length); // DEBUG
     participants.sort((a, b) => a.x - b.x);
 
-    // Remove duplicate participants
+    // Merge participants that are vertically aligned (same X)
+    const mergedParticipants = [];
+    if (participants.length > 0) {
+      let currentP = participants[0];
+      for (let i = 1; i < participants.length; i++) {
+        const nextP = participants[i];
+        // If X coordinates are very close, treat as the same participant (multi-line header)
+        // BUT only if Y coordinates are also close (e.g. < 50px).
+        // If Y coordinates are far apart, it's likely a duplicate label at the bottom of the diagram.
+        if (Math.abs(nextP.x - currentP.x) < 5) {
+          if (Math.abs(nextP.y - currentP.y) < 50) {
+            currentP.name += '<br/>' + nextP.name;
+          } else {
+            // Far apart Y, likely duplicate label. Don't merge.
+            // Push currentP, start new group with nextP.
+            // Note: nextP will likely be removed later by seenNames if name is identical.
+            mergedParticipants.push(currentP);
+            currentP = nextP;
+          }
+        } else {
+          mergedParticipants.push(currentP);
+          currentP = nextP;
+        }
+      }
+      mergedParticipants.push(currentP);
+    }
+
+    // Remove duplicate participants and assign IDs
     const uniqueParticipants = [];
     const seenNames = new Set();
-    participants.forEach(p => {
+    let idCounter = 1;
+
+    mergedParticipants.forEach(p => {
       if (!seenNames.has(p.name)) {
+        // Assign a safe ID
+        p.id = `p${idCounter++}`;
         uniqueParticipants.push(p);
         seenNames.add(p.name);
       }
@@ -1053,11 +1151,11 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           let noteTarget;
           if (coveredParticipants.length === 1) {
             // Single participant
-            noteTarget = coveredParticipants[0].name;
+            noteTarget = coveredParticipants[0].id;
           } else {
             // Multiple participants, use first and last
-            const firstParticipant = coveredParticipants[0].name;
-            const lastParticipant = coveredParticipants[coveredParticipants.length - 1].name;
+            const firstParticipant = coveredParticipants[0].id;
+            const lastParticipant = coveredParticipants[coveredParticipants.length - 1].id;
             noteTarget = `${firstParticipant},${lastParticipant}`;
           }
 
@@ -1085,8 +1183,9 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         messageTexts.push({ text, y, x });
       }
     });
+    // Sort texts by Y to help with processing
     messageTexts.sort((a, b) => a.y - b.y);
-    console.log("Found message texts:", messageTexts.length); // DEBUG
+    if (DEBUG_MODE) console.log("Found message texts:", messageTexts.length); // DEBUG
 
     // Collect all message lines
     const messageLines = [];
@@ -1102,13 +1201,13 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       }
     });
 
-    // Collect all curved message paths (self messages)
+    // Collect all curved message paths (self messages AND potentially others)
     svgElement.querySelectorAll('path.messageLine0, path.messageLine1').forEach(pathEl => {
       const d = pathEl.getAttribute('d');
       const isDashed = pathEl.classList.contains('messageLine1');
 
       if (d) {
-        // Parse path, check if it's a self message
+        // Parse path
         const moveMatch = d.match(/M\s*([^,\s]+)[,\s]+([^,\s]+)/);
         const endMatch = d.match(/([^,\s]+)[,\s]+([^,\s]+)$/);
 
@@ -1119,26 +1218,85 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           const y2 = parseFloat(endMatch[2]);
 
           // Check if it's a self message (start and end x coordinates are close)
-          if (Math.abs(x1 - x2) < SEQ_CONSTANTS.SELF_MESSAGE_DIST) {
-            messageLines.push({
-              x1, y1, x2, y2, isDashed,
-              isSelfMessage: true
-            });
-          }
+          // Increased tolerance for wider self-loops
+          const isSelfMessage = Math.abs(x1 - x2) < 100;
+
+          messageLines.push({
+            x1, y1, x2, y2, isDashed,
+            isSelfMessage
+          });
         }
       }
     });
 
     messageLines.sort((a, b) => a.y1 - b.y1);
-    console.log("Found message lines:", messageLines.length); // DEBUG
+    if (DEBUG_MODE) console.log("Found message lines:", messageLines.length); // DEBUG
 
-    // Match message lines and message text
-    for (let i = 0; i < Math.min(messageLines.length, messageTexts.length); i++) {
-      const line = messageLines[i];
-      const messageText = messageTexts[i];
+    // Match texts to lines using Biased Nearest Neighbor matching
+    // We want to assign text to the line it belongs to.
+    // Usually text is ABOVE the arrow (Next Line).
+    // Sometimes text is BELOW the arrow (Prev Line).
+    // If text is between Line A and Line B:
+    // - If it's close to Line B (Next), it's likely Line B's header/payload.
+    // - If it's VERY close to Line A (Prev), it might be Line A's label below.
 
-      let fromParticipant = null;
-      let toParticipant = null;
+    const lineTexts = new Map(); // Map<LineObject, Array<TextObject>>
+    const NEXT_LINE_THRESHOLD = 70; // Max distance to consider belonging to next line (Increased from 40)
+
+    messageTexts.forEach(textObj => {
+      // Find closest line before (prev) and after (next)
+      let prevLine = null;
+      let nextLine = null;
+      let dPrev = Infinity;
+      let dNext = Infinity;
+
+      for (const line of messageLines) {
+        if (line.y1 <= textObj.y) {
+          const dist = textObj.y - line.y1;
+          if (dist < dPrev) {
+            dPrev = dist;
+            prevLine = line;
+          }
+        } else {
+          const dist = line.y1 - textObj.y;
+          if (dist < dNext) {
+            dNext = dist;
+            nextLine = line;
+          }
+        }
+      }
+
+      let assignedLine = null;
+
+      if (nextLine && dNext < NEXT_LINE_THRESHOLD) {
+        // Prefer the next line (standard sequence diagram text position: above the line)
+        // Only assign to previous line if next line is too far (handled by threshold)
+        // or if we strictly want to support "text below line" which is rare and causing issues.
+        assignedLine = nextLine;
+      } else if (prevLine) {
+        // Too far from next line, or no next line. Assign to previous line.
+        assignedLine = prevLine;
+      } else if (nextLine) {
+        // No previous line (text at very top), assign to next line
+        assignedLine = nextLine;
+      }
+
+      if (assignedLine) {
+        if (!lineTexts.has(assignedLine)) {
+          lineTexts.set(assignedLine, []);
+        }
+        lineTexts.get(assignedLine).push(textObj);
+      } else {
+        if (DEBUG_MODE) console.log("Unmatched text:", textObj.text);
+      }
+    });
+
+    // Create messages from lines
+    messageLines.forEach((line, index) => {
+      let fromParticipantId = null;
+      let toParticipantId = null;
+      let fromParticipantName = null;
+      let toParticipantName = null;
 
       if (line.isSelfMessage) {
         // Self message - find participant closest to x1
@@ -1147,7 +1305,8 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           const dist = Math.abs(p.x - line.x1);
           if (dist < minDist) {
             minDist = dist;
-            fromParticipant = toParticipant = p.name;
+            fromParticipantId = toParticipantId = p.id;
+            fromParticipantName = toParticipantName = p.name;
           }
         }
       } else {
@@ -1157,7 +1316,8 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           const dist = Math.abs(p.x - line.x1);
           if (dist < minDist1) {
             minDist1 = dist;
-            fromParticipant = p.name;
+            fromParticipantId = p.id;
+            fromParticipantName = p.name;
           }
         }
 
@@ -1166,12 +1326,13 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           const dist = Math.abs(p.x - line.x2);
           if (dist < minDist2) {
             minDist2 = dist;
-            toParticipant = p.name;
+            toParticipantId = p.id;
+            toParticipantName = p.name;
           }
         }
       }
 
-      if (fromParticipant && toParticipant) {
+      if (fromParticipantId && toParticipantId) {
         // Determine arrow type
         let arrow;
         if (line.isDashed) {
@@ -1180,18 +1341,25 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           arrow = '->>'; // Solid arrow
         }
 
-        messages.push({
-          from: fromParticipant,
-          to: toParticipant,
-          text: messageText.text,
-          arrow: arrow,
-          y: line.y1,
-          isSelfMessage: line.isSelfMessage || false
-        });
+        // Get texts for this line
+        const texts = lineTexts.get(line) || [];
+        // Sort texts by Y to ensure correct order (e.g. header then body)
+        texts.sort((a, b) => a.y - b.y);
+        const combinedText = texts.map(t => t.text).join('<br/>');
 
-        console.log(`Message ${i + 1}: ${fromParticipant} ${arrow} ${toParticipant}: ${messageText.text}`); // DEBUG
+        if (combinedText) {
+          messages.push({
+            from: fromParticipantId,
+            to: toParticipantId,
+            text: combinedText,
+            arrow: arrow,
+            y: line.y1,
+            isSelfMessage: line.isSelfMessage || false
+          });
+          if (DEBUG_MODE) console.log(`Message ${index + 1}: ${fromParticipantName} (${fromParticipantId}) ${arrow} ${toParticipantName} (${toParticipantId}): ${combinedText}`); // DEBUG
+        }
       }
-    }
+    });
     return messages;
   }
 
@@ -1341,7 +1509,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           }
 
           blocks.push({ xMin, xMax, yMin, yMax, type, condition, dividers });
-          console.log(`Found block: ${type} [${condition}] from y ${yMin} to ${yMax}, dividers: ${dividers.length}`); // DEBUG
+          if (DEBUG_MODE) console.log(`Found block: ${type} [${condition}] from y ${yMin} to ${yMax}, dividers: ${dividers.length}`); // DEBUG
         }
       }
     });
@@ -1351,9 +1519,21 @@ if (!ALLOW_SCRIPT_EXECUTION) {
   function generateMermaidCode(uniqueParticipants, messages, notes, blocks) {
     let mermaidOutput = "sequenceDiagram\n";
 
-    // Add participants
+    // Helper to escape participant names if they contain special characters
+    const escapeName = (name) => {
+      if (!name) return name;
+      // If name contains colons, or other special chars (except spaces), wrap in quotes
+      // User prefers "Client 1" without quotes, but "key: seat-1" needs quotes.
+      if (/[:;\\(\\)\\[\\]\\{\\}]/.test(name) || name.includes('"')) {
+        return `"${name.replace(/"/g, '')}"`; // Simple escaping: remove existing quotes to avoid breaking
+      }
+      return name;
+    };
+
+    // Add participants with aliases
     uniqueParticipants.forEach(p => {
-      mermaidOutput += `  participant ${p.name}\n`;
+      // Use ID as the internal identifier, and Name as the display label
+      mermaidOutput += `  participant ${p.id} as ${escapeName(p.name)}\n`;
     });
     mermaidOutput += "\n";
 
@@ -1406,10 +1586,13 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         }
       } else if (event.type === 'note') {
         const indent = blockStack.length > 0 ? '  ' : '';
+        // Handle multiple targets (comma separated IDs)
+        // Note: IDs are safe, so no escaping needed for them
         mermaidOutput += `${indent}  note over ${event.data.target}: ${event.data.text}\n`;
       } else if (event.type === 'message') {
         const indent = blockStack.length > 0 ? '  ' : '';
         const msg = event.data;
+        // Use IDs for from/to
         mermaidOutput += `${indent}  ${msg.from}${msg.arrow}${msg.to}: ${msg.text}\n`;
       }
     });
@@ -1420,7 +1603,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       blockStack.pop();
     }
 
-    console.log("Generated sequence mermaid code:", mermaidOutput.substring(0, 200) + "..."); // DEBUG
+    if (DEBUG_MODE) console.log("Generated sequence mermaid code:", mermaidOutput.substring(0, 200) + "..."); // DEBUG
     return '```mermaid\n' + mermaidOutput.trim() + '\n```';
   }
 
@@ -1432,7 +1615,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
   function convertStateDiagramSvgToMermaidText(svgElement) {
     if (!svgElement) return null;
 
-    console.log("Converting state diagram...");
+    if (DEBUG_MODE) console.log("Converting state diagram...");
 
     const nodes = [];
 
@@ -1462,7 +1645,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         x2: tx + rx + width,
         y2: ty + ry + height
       });
-      console.log(`Found State: ${stateName}`, nodes[nodes.length - 1]);
+      if (DEBUG_MODE) console.log(`Found State: ${stateName}`, nodes[nodes.length - 1]);
     });
 
     // 2. Find start state
@@ -1483,7 +1666,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           y2: ty + r,
           isSpecial: true
         });
-        console.log("Found Start State", nodes[nodes.length - 1]);
+        if (DEBUG_MODE) console.log("Found Start State", nodes[nodes.length - 1]);
       }
     }
 
@@ -1505,7 +1688,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
               y2: ty + r,
               isSpecial: true
             });
-            console.log("Found End State", nodes[nodes.length - 1]);
+            if (DEBUG_MODE) console.log("Found End State", nodes[nodes.length - 1]);
           }
         }
       }
@@ -1621,8 +1804,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
 
     if (transitions.length === 0) return null;
 
-    console.log("State diagram conversion completed. Transitions:", transitions.length);
-    console.log("Generated state diagram mermaid code:", mermaidCode);
+    if (DEBUG_MODE) {
+      console.log("State diagram conversion completed. Transitions:", transitions.length);
+      console.log("Generated state diagram mermaid code:", mermaidCode);
+    }
 
     return '```mermaid\n' + mermaidCode.trim() + '\n```';
   }
@@ -1737,37 +1922,38 @@ if (!ALLOW_SCRIPT_EXECUTION) {
             const diagramTypeDesc = svgElement.getAttribute('aria-roledescription');
             const diagramClass = svgElement.getAttribute('class');
 
-            console.log("Found SVG in PRE: desc=", diagramTypeDesc, "class=", diagramClass); // DEBUG
+            if (DEBUG_MODE) console.log("Found SVG in PRE: desc=", diagramTypeDesc, "class=", diagramClass); // DEBUG
+
             if (diagramTypeDesc && diagramTypeDesc.includes('flowchart')) {
-              console.log("Trying to convert flowchart..."); // DEBUG
+              if (DEBUG_MODE) console.log("Trying to convert flowchart..."); // DEBUG
               mermaidOutput = convertFlowchartSvgToMermaidText(svgElement);
             } else if (diagramTypeDesc && diagramTypeDesc.includes('class')) {
-              console.log("Trying to convert class diagram..."); // DEBUG
+              if (DEBUG_MODE) console.log("Trying to convert class diagram..."); // DEBUG
               mermaidOutput = convertClassDiagramSvgToMermaidText(svgElement);
             } else if (diagramTypeDesc && diagramTypeDesc.includes('sequence')) {
-              console.log("Trying to convert sequence diagram..."); // DEBUG
+              if (DEBUG_MODE) console.log("Trying to convert sequence diagram..."); // DEBUG
               mermaidOutput = convertSequenceDiagramSvgToMermaidText(svgElement);
             } else if (diagramTypeDesc && diagramTypeDesc.includes('stateDiagram')) {
-              console.log("Trying to convert state diagram..."); // DEBUG
+              if (DEBUG_MODE) console.log("Trying to convert state diagram..."); // DEBUG
               mermaidOutput = convertStateDiagramSvgToMermaidText(svgElement);
             } else if (diagramClass && diagramClass.includes('flowchart')) {
-              console.log("Trying to convert flowchart by class..."); // DEBUG
+              if (DEBUG_MODE) console.log("Trying to convert flowchart by class..."); // DEBUG
               mermaidOutput = convertFlowchartSvgToMermaidText(svgElement);
             } else if (diagramClass && (diagramClass.includes('classDiagram') || diagramClass.includes('class'))) {
-              console.log("Trying to convert class diagram by class..."); // DEBUG
+              if (DEBUG_MODE) console.log("Trying to convert class diagram by class..."); // DEBUG
               mermaidOutput = convertClassDiagramSvgToMermaidText(svgElement);
             } else if (diagramClass && (diagramClass.includes('sequenceDiagram') || diagramClass.includes('sequence'))) {
-              console.log("Trying to convert sequence diagram by class..."); // DEBUG
+              if (DEBUG_MODE) console.log("Trying to convert sequence diagram by class..."); // DEBUG
               mermaidOutput = convertSequenceDiagramSvgToMermaidText(svgElement);
             } else if (diagramClass && (diagramClass.includes('statediagram') || diagramClass.includes('stateDiagram'))) {
-              console.log("Trying to convert state diagram by class..."); // DEBUG
+              if (DEBUG_MODE) console.log("Trying to convert state diagram by class..."); // DEBUG
               mermaidOutput = convertStateDiagramSvgToMermaidText(svgElement);
             }
 
             if (mermaidOutput) {
-              console.log("Successfully converted SVG to mermaid:", mermaidOutput.substring(0, 100) + "..."); // DEBUG
+              if (DEBUG_MODE) console.log("Successfully converted SVG to mermaid:", mermaidOutput.substring(0, 100) + "..."); // DEBUG
             } else {
-              console.log("Failed to convert SVG, using fallback"); // DEBUG
+              if (DEBUG_MODE) console.log("Failed to convert SVG, using fallback"); // DEBUG
             }
           }
 
@@ -2146,5 +2332,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
 
   // Notify the background script that the content script is ready
   chrome.runtime.sendMessage({ action: "contentScriptReady" });
+
+
 
 } // End of ALLOW_SCRIPT_EXECUTION check
