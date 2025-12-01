@@ -152,12 +152,12 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     } else if (request.action === "pageLoaded") {
       // Page loading complete, batch operation preparation can be handled here
       // No sendResponse needed, as this is a notification from background.js
-      console.log("Page loaded:", window.location.href);
+      if (DEBUG_MODE) console.log("Page loaded:", window.location.href);
       // Always send a response, even if empty, to avoid connection errors
       sendResponse({ received: true });
     } else if (request.action === "tabActivated") {
       // Tab has been activated, possibly after being in bfcache
-      console.log("Tab activated:", window.location.href);
+      if (DEBUG_MODE) console.log("Tab activated:", window.location.href);
       // Acknowledge receipt of message to avoid connection errors
       sendResponse({ received: true });
     }
@@ -168,7 +168,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
   function convertFlowchartSvgToMermaidText(svgElement) {
     if (!svgElement) return null;
 
-    console.log("Converting flowchart SVG to Mermaid with Index-Based Matching...");
+    if (DEBUG_MODE) console.log("Converting flowchart SVG to Mermaid with Index-Based Matching...");
     let mermaidCode = "flowchart TD\n\n";
     const nodes = {};
     const clusters = {};
@@ -291,8 +291,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     const pathElements = Array.from(svgElement.querySelectorAll('path.flowchart-link, g.edgePath > path, g.edgePaths > path, path.edge-thickness-normal, path[marker-end]'));
     const labelElements = Array.from(svgElement.querySelectorAll('g.edgeLabel, g.edgeLabels > g.edgeLabel'));
 
-    console.log(`[Mermaid Debug] Found ${pathElements.length} paths and ${labelElements.length} labels.`);
-    console.log(`[Mermaid Debug] Known nodes:`, Object.keys(nodes));
+    if (DEBUG_MODE) {
+      console.log(`[Mermaid Debug] Found ${pathElements.length} paths and ${labelElements.length} labels.`);
+      console.log(`[Mermaid Debug] Known nodes:`, Object.keys(nodes));
+    }
 
     // Helper to get center of an element
     function getCenter(bbox) {
@@ -441,7 +443,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           if (minStartDist < MAX_DISTANCE_THRESHOLD && minEndDist < MAX_DISTANCE_THRESHOLD) {
             sourceId = nearestSource.mermaidId;
             targetId = nearestTarget.mermaidId;
-            if (DEBUG_MODE) console.log(`[Mermaid Debug] Path ${index} Geometric Match: Source=${sourceId} (${Math.round(minStartDist)}px), Target=${targetId} (${Math.round(minEndDist)}px)`);
+            if (DEBUG_MODE) console.debug(`[Mermaid Debug] Path ${index} Geometric Match: Source=${sourceId} (${Math.round(minStartDist)}px), Target=${targetId} (${Math.round(minEndDist)}px)`);
           } else {
             if (DEBUG_MODE) console.debug(`[Mermaid Debug] Path ${index} Geometric Match Failed: Distances too large. Source=${Math.round(minStartDist)}px, Target=${Math.round(minEndDist)}px`);
           }
@@ -1056,26 +1058,26 @@ if (!ALLOW_SCRIPT_EXECUTION) {
 
     if (uniqueParticipants.length === 0 && messages.length === 0) return null;
 
-    console.log("Sequence diagram conversion completed. Participants:", uniqueParticipants.length, "Messages:", messages.length, "Notes:", notes.length); // DEBUG
+    if (DEBUG_MODE) console.log("Sequence diagram conversion completed. Participants:", uniqueParticipants.length, "Messages:", messages.length, "Notes:", notes.length); // DEBUG
 
     return generateMermaidCode(uniqueParticipants, messages, notes, blocks);
   }
 
   function parseParticipants(svgElement) {
     const participants = [];
-    console.log("Looking for sequence participants..."); // DEBUG
+    if (DEBUG_MODE) console.log("Looking for sequence participants..."); // DEBUG
 
     // Find all participant text elements
     svgElement.querySelectorAll('text.actor-box').forEach((textEl) => {
       const name = textEl.textContent.trim().replace(/^"|"$/g, ''); // Remove quotes
       const x = parseFloat(textEl.getAttribute('x'));
-      console.log("Found participant:", name, "at x:", x); // DEBUG
+      if (DEBUG_MODE) console.log("Found participant:", name, "at x:", x); // DEBUG
       if (name && !isNaN(x)) {
         participants.push({ name, x });
       }
     });
 
-    console.log("Total participants found:", participants.length); // DEBUG
+    if (DEBUG_MODE) console.log("Total participants found:", participants.length); // DEBUG
     participants.sort((a, b) => a.x - b.x);
 
     // Remove duplicate participants
@@ -1155,7 +1157,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       }
     });
     messageTexts.sort((a, b) => a.y - b.y);
-    console.log("Found message texts:", messageTexts.length); // DEBUG
+    if (DEBUG_MODE) console.log("Found message texts:", messageTexts.length); // DEBUG
 
     // Collect all message lines
     const messageLines = [];
@@ -1199,7 +1201,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     });
 
     messageLines.sort((a, b) => a.y1 - b.y1);
-    console.log("Found message lines:", messageLines.length); // DEBUG
+    if (DEBUG_MODE) console.log("Found message lines:", messageLines.length); // DEBUG
 
     // Match message lines and message text
     for (let i = 0; i < Math.min(messageLines.length, messageTexts.length); i++) {
@@ -1258,7 +1260,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           isSelfMessage: line.isSelfMessage || false
         });
 
-        console.log(`Message ${i + 1}: ${fromParticipant} ${arrow} ${toParticipant}: ${messageText.text}`); // DEBUG
+        if (DEBUG_MODE) console.log(`Message ${i + 1}: ${fromParticipant} ${arrow} ${toParticipant}: ${messageText.text}`); // DEBUG
       }
     }
     return messages;
@@ -1410,7 +1412,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           }
 
           blocks.push({ xMin, xMax, yMin, yMax, type, condition, dividers });
-          console.log(`Found block: ${type} [${condition}] from y ${yMin} to ${yMax}, dividers: ${dividers.length}`); // DEBUG
+          if (DEBUG_MODE) console.log(`Found block: ${type} [${condition}] from y ${yMin} to ${yMax}, dividers: ${dividers.length}`); // DEBUG
         }
       }
     });
@@ -1489,7 +1491,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       blockStack.pop();
     }
 
-    console.log("Generated sequence mermaid code:", mermaidOutput.substring(0, 200) + "..."); // DEBUG
+    if (DEBUG_MODE) console.log("Generated sequence mermaid code:", mermaidOutput.substring(0, 200) + "..."); // DEBUG
     return '```mermaid\n' + mermaidOutput.trim() + '\n```';
   }
 
@@ -1501,7 +1503,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
   function convertStateDiagramSvgToMermaidText(svgElement) {
     if (!svgElement) return null;
 
-    console.log("Converting state diagram...");
+    if (DEBUG_MODE) console.log("Converting state diagram...");
 
     const nodes = [];
 
@@ -1531,7 +1533,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         x2: tx + rx + width,
         y2: ty + ry + height
       });
-      console.log(`Found State: ${stateName}`, nodes[nodes.length - 1]);
+      if (DEBUG_MODE) console.log(`Found State: ${stateName}`, nodes[nodes.length - 1]);
     });
 
     // 2. Find start state
@@ -1552,7 +1554,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           y2: ty + r,
           isSpecial: true
         });
-        console.log("Found Start State", nodes[nodes.length - 1]);
+        if (DEBUG_MODE) console.log("Found Start State", nodes[nodes.length - 1]);
       }
     }
 
@@ -1574,7 +1576,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
               y2: ty + r,
               isSpecial: true
             });
-            console.log("Found End State", nodes[nodes.length - 1]);
+            if (DEBUG_MODE) console.log("Found End State", nodes[nodes.length - 1]);
           }
         }
       }
@@ -1690,8 +1692,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
 
     if (transitions.length === 0) return null;
 
-    console.log("State diagram conversion completed. Transitions:", transitions.length);
-    console.log("Generated state diagram mermaid code:", mermaidCode);
+    if (DEBUG_MODE) {
+      console.log("State diagram conversion completed. Transitions:", transitions.length);
+      console.log("Generated state diagram mermaid code:", mermaidCode);
+    }
 
     return '```mermaid\n' + mermaidCode.trim() + '\n```';
   }
@@ -1806,37 +1810,58 @@ if (!ALLOW_SCRIPT_EXECUTION) {
             const diagramTypeDesc = svgElement.getAttribute('aria-roledescription');
             const diagramClass = svgElement.getAttribute('class');
 
-            console.log("Found SVG in PRE: desc=", diagramTypeDesc, "class=", diagramClass); // DEBUG
-            if (diagramTypeDesc && diagramTypeDesc.includes('flowchart')) {
-              console.log("Trying to convert flowchart..."); // DEBUG
-              mermaidOutput = convertFlowchartSvgToMermaidText(svgElement);
-            } else if (diagramTypeDesc && diagramTypeDesc.includes('class')) {
-              console.log("Trying to convert class diagram..."); // DEBUG
-              mermaidOutput = convertClassDiagramSvgToMermaidText(svgElement);
-            } else if (diagramTypeDesc && diagramTypeDesc.includes('sequence')) {
-              console.log("Trying to convert sequence diagram..."); // DEBUG
-              mermaidOutput = convertSequenceDiagramSvgToMermaidText(svgElement);
-            } else if (diagramTypeDesc && diagramTypeDesc.includes('stateDiagram')) {
-              console.log("Trying to convert state diagram..."); // DEBUG
-              mermaidOutput = convertStateDiagramSvgToMermaidText(svgElement);
-            } else if (diagramClass && diagramClass.includes('flowchart')) {
-              console.log("Trying to convert flowchart by class..."); // DEBUG
-              mermaidOutput = convertFlowchartSvgToMermaidText(svgElement);
-            } else if (diagramClass && (diagramClass.includes('classDiagram') || diagramClass.includes('class'))) {
-              console.log("Trying to convert class diagram by class..."); // DEBUG
-              mermaidOutput = convertClassDiagramSvgToMermaidText(svgElement);
-            } else if (diagramClass && (diagramClass.includes('sequenceDiagram') || diagramClass.includes('sequence'))) {
-              console.log("Trying to convert sequence diagram by class..."); // DEBUG
-              mermaidOutput = convertSequenceDiagramSvgToMermaidText(svgElement);
-            } else if (diagramClass && (diagramClass.includes('statediagram') || diagramClass.includes('stateDiagram'))) {
-              console.log("Trying to convert state diagram by class..."); // DEBUG
-              mermaidOutput = convertStateDiagramSvgToMermaidText(svgElement);
+            if (DEBUG_MODE) console.log("Found SVG in PRE: desc=", diagramTypeDesc, "class=", diagramClass); // DEBUG
+            if (DEBUG_MODE) {
+              if (diagramTypeDesc && diagramTypeDesc.includes('flowchart')) {
+                console.log("Trying to convert flowchart..."); // DEBUG
+                mermaidOutput = convertFlowchartSvgToMermaidText(svgElement);
+              } else if (diagramTypeDesc && diagramTypeDesc.includes('class')) {
+                console.log("Trying to convert class diagram..."); // DEBUG
+                mermaidOutput = convertClassDiagramSvgToMermaidText(svgElement);
+              } else if (diagramTypeDesc && diagramTypeDesc.includes('sequence')) {
+                console.log("Trying to convert sequence diagram..."); // DEBUG
+                mermaidOutput = convertSequenceDiagramSvgToMermaidText(svgElement);
+              } else if (diagramTypeDesc && diagramTypeDesc.includes('stateDiagram')) {
+                console.log("Trying to convert state diagram..."); // DEBUG
+                mermaidOutput = convertStateDiagramSvgToMermaidText(svgElement);
+              } else if (diagramClass && diagramClass.includes('flowchart')) {
+                console.log("Trying to convert flowchart by class..."); // DEBUG
+                mermaidOutput = convertFlowchartSvgToMermaidText(svgElement);
+              } else if (diagramClass && (diagramClass.includes('classDiagram') || diagramClass.includes('class'))) {
+                console.log("Trying to convert class diagram by class..."); // DEBUG
+                mermaidOutput = convertClassDiagramSvgToMermaidText(svgElement);
+              } else if (diagramClass && (diagramClass.includes('sequenceDiagram') || diagramClass.includes('sequence'))) {
+                console.log("Trying to convert sequence diagram by class..."); // DEBUG
+                mermaidOutput = convertSequenceDiagramSvgToMermaidText(svgElement);
+              } else if (diagramClass && (diagramClass.includes('statediagram') || diagramClass.includes('stateDiagram'))) {
+                console.log("Trying to convert state diagram by class..."); // DEBUG
+                mermaidOutput = convertStateDiagramSvgToMermaidText(svgElement);
+              }
+            } else {
+              // Non-debug mode: just call the functions without logging
+              if (diagramTypeDesc && diagramTypeDesc.includes('flowchart')) {
+                mermaidOutput = convertFlowchartSvgToMermaidText(svgElement);
+              } else if (diagramTypeDesc && diagramTypeDesc.includes('class')) {
+                mermaidOutput = convertClassDiagramSvgToMermaidText(svgElement);
+              } else if (diagramTypeDesc && diagramTypeDesc.includes('sequence')) {
+                mermaidOutput = convertSequenceDiagramSvgToMermaidText(svgElement);
+              } else if (diagramTypeDesc && diagramTypeDesc.includes('stateDiagram')) {
+                mermaidOutput = convertStateDiagramSvgToMermaidText(svgElement);
+              } else if (diagramClass && diagramClass.includes('flowchart')) {
+                mermaidOutput = convertFlowchartSvgToMermaidText(svgElement);
+              } else if (diagramClass && (diagramClass.includes('classDiagram') || diagramClass.includes('class'))) {
+                mermaidOutput = convertClassDiagramSvgToMermaidText(svgElement);
+              } else if (diagramClass && (diagramClass.includes('sequenceDiagram') || diagramClass.includes('sequence'))) {
+                mermaidOutput = convertSequenceDiagramSvgToMermaidText(svgElement);
+              } else if (diagramClass && (diagramClass.includes('statediagram') || diagramClass.includes('stateDiagram'))) {
+                mermaidOutput = convertStateDiagramSvgToMermaidText(svgElement);
+              }
             }
 
             if (mermaidOutput) {
-              console.log("Successfully converted SVG to mermaid:", mermaidOutput.substring(0, 100) + "..."); // DEBUG
+              if (DEBUG_MODE) console.log("Successfully converted SVG to mermaid:", mermaidOutput.substring(0, 100) + "..."); // DEBUG
             } else {
-              console.log("Failed to convert SVG, using fallback"); // DEBUG
+              if (DEBUG_MODE) console.log("Failed to convert SVG, using fallback"); // DEBUG
             }
           }
 
