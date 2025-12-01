@@ -176,7 +176,18 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     const allElements = {}; // All nodes and clusters, for easy lookup
 
     // 1. Collect all nodes
-    svgElement.querySelectorAll('g.node').forEach(nodeEl => {
+    // Expanded selectors: g.node is standard, but some versions use g.default or just IDs
+    const nodeCandidates = Array.from(svgElement.querySelectorAll('g.node, g.default, g[id^="flowchart-"], g[id^="mermaid-"]'));
+
+    nodeCandidates.forEach(nodeEl => {
+      // Filter out non-nodes (edges, clusters, labels) if they got caught by ID selectors
+      if (nodeEl.classList.contains('edgePath') ||
+        nodeEl.classList.contains('cluster') ||
+        nodeEl.classList.contains('label') ||
+        nodeEl.classList.contains('edgeLabel')) {
+        return;
+      }
+
       const svgId = nodeEl.id;
       if (!svgId) return;
 
@@ -276,10 +287,12 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     // 4. Process edges and labels using Geometric Matching (Nearest Neighbor)
     const edges = [];
 
-    const pathElements = Array.from(svgElement.querySelectorAll('path.flowchart-link'));
-    const labelElements = Array.from(svgElement.querySelectorAll('g.edgeLabel'));
+    // Expanded selectors for edges to support flowchart-v2 and other variants
+    const pathElements = Array.from(svgElement.querySelectorAll('path.flowchart-link, g.edgePath > path, g.edgePaths > path, path.edge-thickness-normal, path[marker-end]'));
+    const labelElements = Array.from(svgElement.querySelectorAll('g.edgeLabel, g.edgeLabels > g.edgeLabel'));
 
-    console.log(`Found ${pathElements.length} paths and ${labelElements.length} labels.`);
+    console.log(`[Mermaid Debug] Found ${pathElements.length} paths and ${labelElements.length} labels.`);
+    console.log(`[Mermaid Debug] Known nodes:`, Object.keys(nodes));
 
     // Helper to get center of an element
     function getCenter(bbox) {
@@ -292,6 +305,13 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     // Helper to get distance between two points
     function getDistance(p1, p2) {
       return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+    }
+
+    // Helper to get distance from a point to a box (node)
+    function getDistanceToBox(px, py, bbox) {
+      const dx = Math.max(bbox.left - px, 0, px - bbox.right);
+      const dy = Math.max(bbox.top - py, 0, py - bbox.bottom);
+      return Math.sqrt(dx * dx + dy * dy);
     }
 
     // Map labels to their centers
@@ -314,93 +334,138 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     });
 
     // Process each path
-    pathElements.forEach(path => {
+    pathElements.forEach((path, index) => {
       const pathId = path.id;
-      if (!pathId) return;
 
-      // --- ID Parsing Logic ---
       let sourceId = null;
       let targetId = null;
 
-      // Strategy 1: L_ format (L_source_target_index)
-      let match = pathId.match(/^L_([^_]+)_(.+)_\d+$/);
-      if (match) {
-        sourceId = match[1];
-        targetId = match[2];
-      }
-
-      // Strategy 2: flowchart- format (flowchart-source-target-index)
-      if (!sourceId) {
-        match = pathId.match(/^flowchart-([^-]+)-([^-]+)-\d+$/);
+      // --- Strategy 1: ID Parsing (Legacy & Standard) ---
+      if (pathId) {
+        // L_ format (L_source_target_index)
+        let match = pathId.match(/^L_([^_]+)_(.+)_\d+$/);
         if (match) {
           sourceId = match[1];
           targetId = match[2];
         }
-      }
 
-      // Strategy 3: Robust Fallback (Split and Match)
-      if (!sourceId || !targetId) {
-        let core = pathId.replace(/^(L_|flowchart-)/, '').replace(/[-_]\d+$/, '');
-
-        // Try to split at every possible point
-        for (let j = 1; j < core.length; j++) {
-          const charAtJ = core[j];
-          if (charAtJ === '-' || charAtJ === '_') {
-            const s_clean = core.substring(0, j);
-            const t_clean = core.substring(j + 1);
-
-            // Check against known nodes
-            const sourceNode = Object.values(nodes).find(n => n.mermaidId === s_clean);
-            const targetNode = Object.values(nodes).find(n => n.mermaidId === t_clean);
-
-            if (sourceNode && targetNode) {
-              sourceId = s_clean;
-              targetId = t_clean;
-              break;
-            }
+        // flowchart- format (flowchart-source-target-index)
+        if (!sourceId) {
+          match = pathId.match(/^flowchart-([^-]+)-([^-]+)-\d+$/);
+          if (match) {
+            sourceId = match[1];
+            targetId = match[2];
           }
         }
-      }
 
-      // Strategy 4: Greedy Match (Longest Prefix)
-      if (!sourceId || !targetId) {
-        let core = pathId.replace(/^(L_|flowchart-)/, '').replace(/[-_]\d+$/, '');
-        let bestSource = null;
-        let bestTarget = null;
-
-        for (const nodeSvgId in nodes) {
-          const mId = nodes[nodeSvgId].mermaidId;
-          if (core.startsWith(mId)) {
-            const remainder = core.substring(mId.length);
-            if (remainder.startsWith('-') || remainder.startsWith('_')) {
-              const targetCandidate = remainder.substring(1);
-              const targetNode = Object.values(nodes).find(n => n.mermaidId === targetCandidate);
-              if (targetNode) {
-                if (!bestSource || mId.length > bestSource.length) {
-                  bestSource = mId;
-                  bestTarget = targetCandidate;
-                }
+        // Robust Fallback (Split and Match)
+        if (!sourceId || !targetId) {
+          let core = pathId.replace(/^(L_|flowchart-)/, '').replace(/[-_]\d+$/, '');
+          // Try to split at every possible point
+          for (let j = 1; j < core.length; j++) {
+            const charAtJ = core[j];
+            if (charAtJ === '-' || charAtJ === '_') {
+              const s_clean = core.substring(0, j);
+              const t_clean = core.substring(j + 1);
+              const sourceNode = Object.values(nodes).find(n => n.mermaidId === s_clean);
+              const targetNode = Object.values(nodes).find(n => n.mermaidId === t_clean);
+              if (sourceNode && targetNode) {
+                sourceId = s_clean;
+                targetId = t_clean;
+                break;
               }
             }
           }
         }
-        if (bestSource && bestTarget) {
-          sourceId = bestSource;
-          targetId = bestTarget;
+      }
+
+      // --- Strategy 2: Geometric Matching (Fallback for flowchart-v2 / missing IDs) ---
+      if (!sourceId || !targetId) {
+        // Always try geometric matching if ID parsing failed
+        try {
+          const svg = svgElement.closest('svg') || svgElement;
+          const ptStart = svg.createSVGPoint();
+          const ptEnd = svg.createSVGPoint();
+
+          const totalLength = path.getTotalLength();
+          // Use a small offset for start/end to avoid being exactly on the boundary if that matters,
+          // but usually 0 and totalLength are best.
+          const startPointLocal = path.getPointAtLength(0);
+          const endPointLocal = path.getPointAtLength(totalLength);
+
+          ptStart.x = startPointLocal.x;
+          ptStart.y = startPointLocal.y;
+          ptEnd.x = endPointLocal.x;
+          ptEnd.y = endPointLocal.y;
+
+          // Transform to screen coordinates
+          const globalCTM = path.getScreenCTM();
+          const startPoint = ptStart.matrixTransform(globalCTM);
+          const endPoint = ptEnd.matrixTransform(globalCTM);
+
+          // Find nearest nodes
+          let minStartDist = Infinity;
+          let minEndDist = Infinity;
+          let nearestSource = null;
+          let nearestTarget = null;
+
+          // Log coordinates for debugging
+          if (DEBUG_MODE) {
+            console.log(`[Mermaid Debug] Path ${index} coords: Start(${Math.round(startPoint.x)},${Math.round(startPoint.y)}), End(${Math.round(endPoint.x)},${Math.round(endPoint.y)})`);
+          }
+
+          Object.values(nodes).forEach(node => {
+            const bbox = node.bbox;
+
+            // Use distance to the nearest point on the box (more accurate for large nodes)
+            const startDist = getDistanceToBox(startPoint.x, startPoint.y, bbox);
+            const endDist = getDistanceToBox(endPoint.x, endPoint.y, bbox);
+
+            if (startDist < minStartDist) {
+              minStartDist = startDist;
+              nearestSource = node;
+            }
+            if (endDist < minEndDist) {
+              minEndDist = endDist;
+              nearestTarget = node;
+            }
+          });
+
+          // Threshold check (e.g. 200px is generous but safe for most diagrams)
+          const MAX_DISTANCE_THRESHOLD = 200;
+
+          if (DEBUG_MODE) {
+            console.log(`[Mermaid Debug] Path ${index} Nearest: Source=${nearestSource?.mermaidId} (${Math.round(minStartDist)}px), Target=${nearestTarget?.mermaidId} (${Math.round(minEndDist)}px)`);
+          }
+
+          if (minStartDist < MAX_DISTANCE_THRESHOLD && minEndDist < MAX_DISTANCE_THRESHOLD) {
+            sourceId = nearestSource.mermaidId;
+            targetId = nearestTarget.mermaidId;
+            if (DEBUG_MODE) console.log(`[Mermaid Debug] Path ${index} Geometric Match: Source=${sourceId} (${Math.round(minStartDist)}px), Target=${targetId} (${Math.round(minEndDist)}px)`);
+          } else {
+            if (DEBUG_MODE) console.debug(`[Mermaid Debug] Path ${index} Geometric Match Failed: Distances too large. Source=${Math.round(minStartDist)}px, Target=${Math.round(minEndDist)}px`);
+          }
+
+        } catch (e) {
+          if (DEBUG_MODE) console.debug(`[Mermaid Debug] Geometric matching failed for path ${index}:`, e);
         }
       }
 
+
       if (!sourceId || !targetId) {
         if (DEBUG_MODE) {
-          console.debug(`Could not parse source/target from path ID: ${pathId}`);
+          console.debug(`[Mermaid Debug] Could not parse source/target from path:`, path);
         }
         return;
       }
 
-      const sourceNode = Object.values(nodes).find(n => n.mermaidId === sourceId);
-      const targetNode = Object.values(nodes).find(n => n.mermaidId === targetId);
+      const sourceNode = Object.values(nodes).find(n => n.mermaidId === sourceId) || Object.values(clusters).find(c => c.mermaidId === sourceId);
+      const targetNode = Object.values(nodes).find(n => n.mermaidId === targetId) || Object.values(clusters).find(c => c.mermaidId === targetId);
 
-      if (!sourceNode || !targetNode) return;
+      if (!sourceNode || !targetNode) {
+        if (DEBUG_MODE) console.debug(`[Mermaid Debug] Matched IDs but nodes not found: Source=${sourceId}, Target=${targetId}`);
+        return;
+      }
 
       // --- Label Matching Logic ---
       let matchedLabelText = "";
@@ -412,7 +477,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
 
       let closestLabel = null;
       let minDistance = Infinity;
-      const MAX_DISTANCE_THRESHOLD = 100; // Pixels, adjust if needed
+      const MAX_DISTANCE_THRESHOLD = 150; // Pixels, relaxed
 
       labelData.forEach(label => {
         if (label.matched) return; // Skip already matched labels (optional, but good for 1-to-1)
@@ -430,7 +495,8 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       }
 
       // Determine Arrow Type
-      const isDashed = path.classList.contains('dashed') || path.classList.contains('dotted');
+      const isDashed = path.classList.contains('dashed') || path.classList.contains('dotted') ||
+        getComputedStyle(path).strokeDasharray !== 'none'; // Check computed style too
       const arrow = isDashed ? "-.->" : "-->";
 
       const labelPart = matchedLabelText ? `|"${matchedLabelText}"|` : "";
@@ -1028,10 +1094,13 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     const notes = [];
     svgElement.querySelectorAll('g').forEach(g => {
       const noteRect = g.querySelector('rect.note');
-      const noteText = g.querySelector('text.noteText');
+      const noteTextElements = g.querySelectorAll('text.noteText');
 
-      if (noteRect && noteText) {
-        const text = noteText.textContent.trim();
+      if (noteRect && noteTextElements.length > 0) {
+        const text = Array.from(noteTextElements)
+          .map(el => el.textContent.trim())
+          .filter(t => t)
+          .join('<br/>');
         const x = parseFloat(noteRect.getAttribute('x'));
         const width = parseFloat(noteRect.getAttribute('width'));
         const leftX = x;
@@ -2146,5 +2215,7 @@ if (!ALLOW_SCRIPT_EXECUTION) {
 
   // Notify the background script that the content script is ready
   chrome.runtime.sendMessage({ action: "contentScriptReady" });
+
+
 
 } // End of ALLOW_SCRIPT_EXECUTION check
