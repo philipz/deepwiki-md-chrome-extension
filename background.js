@@ -518,22 +518,18 @@ async function startBatchProcessing(tabId) {
   const urlObj = new URL(tab.url);
   const pathSegments = urlObj.pathname.split('/').filter(segment => segment.length > 0);
 
-  let org, project;
+  // Default extraction (DeepWiki default or Devin non-wiki)
+  let org = sanitizeName(pathSegments[0] || 'org', 'org');
+  let project = sanitizeName(pathSegments[1] || 'project', 'project');
   let fileNamePrefix = '';
 
   if (urlObj.hostname.includes('devin.ai')) {
+    // Special case for Devin wiki URLs
     if (pathSegments[0] === 'wiki') {
       org = sanitizeName(pathSegments[1] || 'org', 'org');
       project = sanitizeName(pathSegments[2] || 'project', 'project');
-    } else {
-      org = sanitizeName(pathSegments[0] || 'org', 'org');
-      project = sanitizeName(pathSegments[1] || 'project', 'project');
     }
     fileNamePrefix = 'Devin-';
-  } else {
-    org = sanitizeName(pathSegments[0] || 'org', 'org');
-    project = sanitizeName(pathSegments[1] || 'project', 'project');
-    fileNamePrefix = '';
   }
 
   // Decide folder name
@@ -596,19 +592,16 @@ async function startBatchSingleFileProcessing(tabId) {
   const urlObj = new URL(tab.url);
   const pathSegments = urlObj.pathname.split('/').filter(segment => segment.length > 0);
 
-  let org, project;
+  // Default extraction
+  let org = sanitizeName(pathSegments[0] || 'org', 'org');
+  let project = sanitizeName(pathSegments[1] || 'project', 'project');
   let fileNamePrefix = '';
 
   if (urlObj.hostname.includes('devin.ai')) {
-    // Devin Logic
-    // URL: /wiki/org/project -> segments: ['wiki', 'org', 'project']
+    // Special case for Devin wiki URLs
     if (pathSegments[0] === 'wiki') {
       org = sanitizeName(pathSegments[1] || 'org', 'org');
       project = sanitizeName(pathSegments[2] || 'project', 'project');
-    } else {
-      // Fallback if URL structure is different on Devin
-      org = sanitizeName(pathSegments[0] || 'org', 'org');
-      project = sanitizeName(pathSegments[1] || 'project', 'project');
     }
     // User requested "Devin-" prefix for Devin downloads
     fileNamePrefix = 'Devin-';
