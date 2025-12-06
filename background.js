@@ -533,27 +533,7 @@ async function startBatchProcessing(tabId) {
   } else {
     org = sanitizeName(pathSegments[0] || 'org', 'org');
     project = sanitizeName(pathSegments[1] || 'project', 'project');
-    fileNamePrefix = 'DeepWiki-'; // Or keep empty/DeepWiki for original? 
-    // User request implies "DeepWiki-" for DeepWiki was the previous norm or what they saw in Zip?
-    // Actually for Zip, previously it used extraction.headTitle. 
-    // But to match Single File format: DeepWiki-org-project
-    // Let's use the explicit 'DeepWiki-' prefix for consistency if that's what "DeepWiki-" refers to in request.
-    // Wait, earlier request said "DeepWiki (deepwiki.com) maintained origin rule". 
-    // Origin rule for Zip logic was `sanitizeFolderName(extraction.headTitle || ...)`
-    // But consistency suggests we might want Org-Project naming for the folder too?
-    // Let's stick to the sophisticated logic but respect the separation.
-    // For DeepWiki Zip, let's keep it structurally similar to Single File if safe, 
-    // OR fallback to old title behavior if unsure?
-    // Actually, line 523 was: `folderName: sanitizeFolderName(extraction.headTitle || ...)`
-    // This often results in "DeepWiki - Philipz - ..." 
-    // Let's standardise it to the predictable ID format we just built for Single File.
-    fileNamePrefix = ''; // DeepWiki legacy for Single File was empty prefix.
-    // But wait, the user said "Download All Pages ... prefix is still DeepWiki-". 
-    // This implies the OLD logic for Zip WAS producing "DeepWiki-".
-    // If I look at line 523: `sanitizeFolderName(extraction.headTitle || ...)`
-    // If the page title is "DeepWiki - Philipz...", then the folder becomes "DeepWiki-Philipz...".
-    // So for Devin, the title is likely "Devin - ..."?
-    // To force "Devin-org-project", we should ignore the title and use our path logic.
+    fileNamePrefix = '';
   }
 
   // Decide folder name

@@ -205,8 +205,6 @@ if (!ALLOW_SCRIPT_EXECUTION) {
 
           if (DEBUG_MODE) console.log(`Devin: Synthesized links found: ${sidebarLinks.length}`);
 
-          if (DEBUG_MODE) console.log(`Devin: Synthesized links found: ${sidebarLinks.length}`);
-
           // No strict path filtering needed for synthesized links as we built them relative to current structure,
           // but we still apply the filter to be safe if it matches our synthesis.
           const pathSegments = window.location.pathname.split('/').filter(Boolean);
