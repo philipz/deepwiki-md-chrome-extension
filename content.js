@@ -42,51 +42,75 @@ if (!ALLOW_SCRIPT_EXECUTION) {
   // Listen for messages from popup
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "convertToMarkdown") {
-      try {
-        // Get page title from head
-        const headTitle = document.title || "";
-        // Format head title: replace slashes and pipes with dashes
-        const formattedHeadTitle = headTitle.replace(/[\/|]/g, '-').replace(/\s+/g, '-').replace('---', '-');
+      const MAX_RETRIES = 10;
+      const RETRY_INTERVAL = 500;
 
-        // Get article title (keep unchanged)
-        const title =
-          document
-            .querySelector(
-              '.container > div:nth-child(1) a[data-selected="true"]'
-            )
-            ?.textContent?.trim() ||
-          document
-            .querySelector(".container > div:nth-child(1) h1")
-            ?.textContent?.trim() ||
-          document.querySelector("h1")?.textContent?.trim() ||
-          "Untitled";
+      const attemptConversion = async (attempt = 0) => {
+        try {
+          // Get page title from head
+          const headTitle = document.title || "";
+          const formattedHeadTitle = headTitle.replace(/[\/|]/g, '-').replace(/\s+/g, '-').replace('---', '-');
 
-        // Get article content container (keep unchanged)
-        const contentContainer =
-          document.querySelector(".container > div:nth-child(2) .prose") ||
-          document.querySelector(".container > div:nth-child(2) .prose-custom") ||
-          document.querySelector(".container > div:nth-child(2)") ||
-          document.body;
+          // Get article title
+          const title =
+            document.querySelector('.container > div:nth-child(1) a[data-selected="true"]')?.textContent?.trim() ||
+            document.querySelector(".container > div:nth-child(1) h1")?.textContent?.trim() ||
+            document.querySelector("h1")?.textContent?.trim() ||
+            "Untitled";
 
-        let markdown = ``;
-        let markdownTitle = title.replace(/\s+/g, '-');
+          // Get article content container
+          let contentContainer;
+          if (window.location.hostname.includes('devin.ai')) {
+            contentContainer =
+              document.querySelector('main') ||
+              document.querySelector('article') ||
+              document.querySelector('.prose') ||
+              document.body;
+          } else {
+            contentContainer =
+              document.querySelector(".container > div:nth-child(2) .prose") ||
+              document.querySelector(".container > div:nth-child(2) .prose-custom") ||
+              document.querySelector(".container > div:nth-child(2)") ||
+              document.body;
+          }
 
-        contentContainer.childNodes.forEach((child) => {
-          markdown += processNode(child);
-        });
+          // Check if content is truly ready (heuristic: not empty, or specific loading state)
+          // For Devin, contentContainer might exist but be empty during loading
+          if (!contentContainer || contentContainer.innerText.trim().length < 50) { // Arbitrary threshold
+            if (attempt < MAX_RETRIES) {
+              if (DEBUG_MODE) console.log(`Content not ready (attempt ${attempt + 1}), retrying...`);
+              setTimeout(() => attemptConversion(attempt + 1), RETRY_INTERVAL);
+              return;
+            } else {
+              if (DEBUG_MODE) console.warn("Content extraction failed after retries, proceeding with what we have.");
+            }
+          }
 
-        // Normalize blank lines
-        markdown = markdown.trim().replace(/\n{3,}/g, "\n\n");
-        sendResponse({
-          success: true,
-          markdown,
-          markdownTitle,
-          headTitle: formattedHeadTitle
-        });
-      } catch (error) {
-        console.error("Error converting to Markdown:", error);
-        sendResponse({ success: false, error: error.message });
-      }
+          let markdown = ``;
+          let markdownTitle = title.replace(/\s+/g, '-');
+
+          if (contentContainer) {
+            contentContainer.childNodes.forEach((child) => {
+              markdown += processNode(child);
+            });
+          }
+
+          markdown = markdown.trim().replace(/\n{3,}/g, "\n\n");
+
+          sendResponse({
+            success: true,
+            markdown,
+            markdownTitle,
+            headTitle: formattedHeadTitle
+          });
+        } catch (error) {
+          console.error("Error converting to Markdown:", error);
+          sendResponse({ success: false, error: error.message });
+        }
+      };
+
+      attemptConversion();
+      return true; // Indicates async response
     } else if (request.action === "extractAllPages") {
       try {
         // Get the head title
@@ -95,10 +119,116 @@ if (!ALLOW_SCRIPT_EXECUTION) {
         const formattedHeadTitle = headTitle.replace(/[\/|]/g, '-').replace(/\s+/g, '-').replace('---', '-');
 
         // Get the base part of the current document path
-        const baseUrl = window.location.origin;
+        // Use href (full URL) to ensure hash links (#item) are resolved relative to the current page path, not just the root domain.
+        const baseUrl = window.location.href;
 
-        // Get all links in the sidebar
-        const sidebarLinks = Array.from(document.querySelectorAll('.border-r-border ul li a'));
+        const hostname = window.location.hostname;
+        let sidebarLinks = [];
+
+        if (hostname.includes('devin.ai')) {
+          // Devin AI sidebar logic
+          if (DEBUG_MODE) console.log('Devin: Detecting sidebar links...');
+
+          // 1. Target the sidebar container
+          // Strategy: Find the main UL directly since container class is unstable (e.g. xl:w-72 vs w-[--sidebar-main-width])
+
+          let sidebarContainer = document.querySelector('div[class*="w-[--sidebar-main-width]"]');
+
+          // Fallback: Find ULs with overflow-y-auto that contain buttons
+          if (!sidebarContainer || sidebarContainer.querySelectorAll('button').length === 0) {
+            const potentialUls = Array.from(document.querySelectorAll('ul.overflow-y-auto, ul.space-y-1'));
+            const validUl = potentialUls.find(ul => ul.querySelector('li > button') && ul.innerText.length > 50); // Heuristic: has buttons and content
+            if (validUl) {
+              // Determine container from UL parent
+              sidebarContainer = validUl.parentElement; // Usually the div wrapper
+              if (DEBUG_MODE) console.log('Devin: Found sidebar via UL heuristic', sidebarContainer);
+            }
+          }
+
+          if (sidebarContainer) {
+            // Strategy: Flat List with Indentation (padding-left)
+            // Based on user feedback: Structure is a single flat UL with LIs having padding-left (0px, 12px, 24px...)
+            // We need to maintain counters at each depth to generate #1.1.2 style hashes.
+
+            const listItems = Array.from(sidebarContainer.querySelectorAll('ul li'));
+
+            if (listItems.length > 0) {
+              let counters = []; // counters[0] = Level 1 count, counters[1] = Level 2 count...
+
+              listItems.forEach(li => {
+                const button = li.querySelector('button');
+                if (!button) return;
+
+                const text = button.textContent.trim();
+                if (!text || text.includes('Add repo')) return;
+
+                // Determine depth from padding-left
+                // Assuming 12px increments: 0px -> 0, 12px -> 1, 24px -> 2
+                const paddingLeftStr = li.style.paddingLeft || window.getComputedStyle(li).paddingLeft || '0px';
+                const paddingVal = parseInt(paddingLeftStr, 10) || 0;
+                const depth = Math.round(paddingVal / 12);
+
+                // Update counters
+                // Ensure array is filled up to current depth
+                for (let i = counters.length; i <= depth; i++) {
+                  counters[i] = 0;
+                }
+
+                // Increment current level
+                counters[depth]++;
+
+                // Reset deeper levels (e.g. if moving from depth 2 back to 1, or just generally)
+                // When we are at depth D, any counters for D+1, D+2 should be reset...
+                // Actually, if we just moved to Depth D, next time we go to D+1 it starts at 1.
+                // We should just slice/reset counters array for indices > depth.
+                counters = counters.slice(0, depth + 1);
+
+                // Construct prefix string: "1.2.1"
+                const prefix = counters.join('.');
+
+                // Synthesize slug
+                const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+                const hash = `#${prefix}-${slug}`;
+
+                if (DEBUG_MODE) console.log(`Devin: Parsed "${text}" at depth ${depth} (pad ${paddingVal}) -> ${hash}`);
+
+                sidebarLinks.push({
+                  getAttribute: (attr) => (attr === 'href' ? hash : null),
+                  textContent: text,
+                  href: window.location.origin + window.location.pathname + hash,
+                });
+              });
+            } else {
+              if (DEBUG_MODE) console.log("Devin: No LIs found in sidebar, trying fallback...");
+            }
+          }
+
+          if (DEBUG_MODE) console.log(`Devin: Synthesized links found: ${sidebarLinks.length}`);
+
+          // No strict path filtering needed for synthesized links as we built them relative to current structure,
+          // but we still apply the filter to be safe if it matches our synthesis.
+          const pathSegments = window.location.pathname.split('/').filter(Boolean);
+          if (pathSegments.length >= 3 && pathSegments[0] === 'wiki') {
+            // ... existing filter logic is fine, will just pass our # hashes
+            // We can simplify filtering here since we generated them manually
+          }
+
+          // Filter out settings and non-content links
+          sidebarLinks = sidebarLinks.filter(a => {
+            const href = a.getAttribute('href');
+            return href && !href.includes('/settings/');
+          });
+
+          if (DEBUG_MODE) console.log(`Devin: Final links count: ${sidebarLinks.length}`);
+        } else {
+          // DeepWiki logic (original)
+          sidebarLinks = Array.from(document.querySelectorAll('.border-r-border ul li a'));
+        }
+
+        // Generic fallback (only if primary method fails on expected domain)
+        if (sidebarLinks.length === 0) {
+          sidebarLinks = Array.from(document.querySelectorAll('nav a, aside a'));
+        }
 
         // Extract link URLs and titles
         const pages = sidebarLinks.map(link => {

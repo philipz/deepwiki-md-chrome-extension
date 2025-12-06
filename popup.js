@@ -20,7 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
       if (!isValidDeepWikiUrl(tab.url)) {
-        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., https://deepwiki.com/org/project)', 'error');
+        showStatus('Please use this extension on a valid DeepWiki or Devin page (e.g., https://deepwiki.com/org/project)', 'error');
         return;
       }
 
@@ -57,7 +57,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
       if (!isValidDeepWikiUrl(tab.url)) {
-        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., https://deepwiki.com/org/project)', 'error');
+        showStatus('Please use this extension on a valid DeepWiki or Devin page (e.g., https://deepwiki.com/org/project)', 'error');
         return;
       }
 
@@ -82,7 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
       if (!isValidDeepWikiUrl(tab.url)) {
-        showStatus('Please use this extension on a valid DeepWiki documentation page (e.g., https://deepwiki.com/org/project)', 'error');
+        showStatus('Please use this extension on a valid DeepWiki or Devin page (e.g., https://deepwiki.com/org/project)', 'error');
         return;
       }
 

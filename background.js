@@ -217,21 +217,26 @@ async function restoreOriginalPage() {
   }
 }
 
-function waitForNavigation(tabId) {
+function navigateToPage(tabId, url) {
+  markTabPending(tabId);
   return new Promise((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      cleanup();
-      reject(new Error('Navigation timeout.'));
-    }, MESSAGE_TIMEOUT);
+    // Setup listeners BEFORE starting navigation to avoid race conditions
+    // especially for fast hash/SPA updates.
+    let timeoutId;
 
     function cleanup() {
       clearTimeout(timeoutId);
       chrome.webNavigation.onCompleted.removeListener(onCompleted);
+      chrome.webNavigation.onReferenceFragmentUpdated.removeListener(onCompleted);
+      chrome.webNavigation.onHistoryStateUpdated.removeListener(onCompleted);
       chrome.webNavigation.onErrorOccurred.removeListener(onError);
     }
 
     function onCompleted(details) {
       if (details.tabId === tabId && details.frameId === 0) {
+        if (typeof DEBUG_MODE !== 'undefined' && DEBUG_MODE) {
+          console.log(`Navigation complete (${details.transitionType || 'spa/hash'}):`, details.url);
+        }
         cleanup();
         resolve();
       }
@@ -245,19 +250,22 @@ function waitForNavigation(tabId) {
     }
 
     chrome.webNavigation.onCompleted.addListener(onCompleted);
+    chrome.webNavigation.onReferenceFragmentUpdated.addListener(onCompleted);
+    chrome.webNavigation.onHistoryStateUpdated.addListener(onCompleted);
     chrome.webNavigation.onErrorOccurred.addListener(onError);
-  });
-}
 
-function navigateToPage(tabId, url) {
-  markTabPending(tabId);
-  return new Promise((resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error('Navigation timeout.'));
+    }, MESSAGE_TIMEOUT);
+
     chrome.tabs.update(tabId, { url }, () => {
       if (chrome.runtime.lastError) {
+        cleanup(); // Clean up if update fails immediately
         reject(new Error(chrome.runtime.lastError.message));
         return;
       }
-      waitForNavigation(tabId).then(resolve).catch(reject);
+      // Navigation started
     });
   });
 }
@@ -506,13 +514,40 @@ async function startBatchProcessing(tabId) {
     throw new Error('No child pages were detected on this document.');
   }
 
+  // Determine folder name based on domain and URL structure
+  const urlObj = new URL(tab.url);
+  const pathSegments = urlObj.pathname.split('/').filter(segment => segment.length > 0);
+
+  // Default extraction (DeepWiki default or Devin non-wiki)
+  let org = sanitizeName(pathSegments[0] || 'org', 'org');
+  let project = sanitizeName(pathSegments[1] || 'project', 'project');
+  let fileNamePrefix = '';
+
+  if (urlObj.hostname.includes('devin.ai')) {
+    // Special case for Devin wiki URLs
+    if (pathSegments[0] === 'wiki') {
+      org = sanitizeName(pathSegments[1] || 'org', 'org');
+      project = sanitizeName(pathSegments[2] || 'project', 'project');
+    }
+    fileNamePrefix = 'Devin-';
+  }
+
+  // Decide folder name
+  let calculatedFolderName;
+  if (urlObj.hostname.includes('devin.ai')) {
+    calculatedFolderName = `${fileNamePrefix}${org}-${project}`;
+  } else {
+    // Keep old behavior for DeepWiki Zip to avoid regression
+    calculatedFolderName = sanitizeFolderName(extraction.headTitle || extraction.currentTitle || 'deepwiki');
+  }
+
   batchState = {
     isRunning: true,
     tabId,
     originalUrl: tab.url,
     pages,
     convertedPages: [],
-    folderName: sanitizeFolderName(extraction.headTitle || extraction.currentTitle || 'deepwiki'),
+    folderName: calculatedFolderName,
     processed: 0,
     failed: 0,
     cancelRequested: false,
@@ -556,14 +591,70 @@ async function startBatchSingleFileProcessing(tabId) {
   // Extract org and project from URL and sanitize for safe filenames
   const urlObj = new URL(tab.url);
   const pathSegments = urlObj.pathname.split('/').filter(segment => segment.length > 0);
-  const org = sanitizeName(pathSegments[0] || 'org', 'org');
-  const project = sanitizeName(pathSegments[1] || 'project', 'project');
+
+  // Default extraction
+  let org = sanitizeName(pathSegments[0] || 'org', 'org');
+  let project = sanitizeName(pathSegments[1] || 'project', 'project');
+  let fileNamePrefix = '';
+
+  if (urlObj.hostname.includes('devin.ai')) {
+    // Special case for Devin wiki URLs
+    if (pathSegments[0] === 'wiki') {
+      org = sanitizeName(pathSegments[1] || 'org', 'org');
+      project = sanitizeName(pathSegments[2] || 'project', 'project');
+    }
+    // User requested "Devin-" prefix for Devin downloads
+    fileNamePrefix = 'Devin-';
+  } else {
+    // DeepWiki Logic
+    // User requested to match "Download All Pages" (Zip) naming convention.
+    // Zip uses: sanitizeFolderName(extraction.headTitle || extraction.currentTitle || 'deepwiki')
+    // So we should do the same here.
+    const titleBasedName = sanitizeName(extraction.headTitle || extraction.currentTitle || 'deepwiki');
+    const lastIndexedDate = sanitizeName(extraction.lastIndexedDate || '', '');
+
+    // Override the structured name generation for DeepWiki to match Zip behavior
+    const fileName = lastIndexedDate
+      ? `${titleBasedName}-${lastIndexedDate}.md`
+      : `${titleBasedName}.md`;
+
+    // Return early with this name for DeepWiki
+    batchState = {
+      isRunning: true,
+      tabId,
+      originalUrl: tab.url,
+      pages,
+      convertedPages: [],
+      folderName: fileName.replace('.md', ''),
+      processed: 0,
+      failed: 0,
+      cancelRequested: false,
+      total: pages.length,
+      currentTitle: '',
+      fileNames: new Set()
+    };
+
+    broadcastBatchUpdate('started', {
+      message: `Found ${batchState.total} pages. Starting single-file batch conversion...`
+    });
+
+    runBatchSingleFileProcessing(fileName);
+
+    return {
+      total: batchState.total,
+      fileName: fileName
+    };
+  }
+
   const lastIndexedDate = sanitizeName(extraction.lastIndexedDate || '', '');
 
-  // Generate sanitized filename: org-project-date.md
+  // Generate sanitized filename
+  // This block now only runs for Devin, as DeepWiki returns early above.
+  const baseName = `${fileNamePrefix}${org}-${project}`;
+
   const fileName = lastIndexedDate
-    ? `${org}-${project}-${lastIndexedDate}.md`
-    : `${org}-${project}.md`;
+    ? `${baseName}-${lastIndexedDate}.md`
+    : `${baseName}.md`;
 
   batchState = {
     isRunning: true,
@@ -668,7 +759,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 // Listen for tab updates to reset readiness and notify content scripts
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (!tab.url || !tab.url.includes('deepwiki.com')) {
+  if (!tab.url || (!tab.url.includes('deepwiki.com') && !tab.url.includes('devin.ai'))) {
     return;
   }
 
@@ -689,7 +780,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // Keep content script informed when a DeepWiki tab becomes active
 chrome.tabs.onActivated.addListener(activeInfo => {
   chrome.tabs.get(activeInfo.tabId, tab => {
-    if (tab && tab.url && tab.url.includes('deepwiki.com')) {
+    if (tab && tab.url && (tab.url.includes('deepwiki.com') || tab.url.includes('devin.ai'))) {
       chrome.tabs.sendMessage(activeInfo.tabId, { action: 'tabActivated' }, () => {
         const error = chrome.runtime.lastError;
         if (error && !error.message.includes('Receiving end does not exist')) {
