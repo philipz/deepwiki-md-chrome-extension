@@ -164,9 +164,10 @@ if (!ALLOW_SCRIPT_EXECUTION) {
 
                 // Determine depth from padding-left
                 // Assuming 12px increments: 0px -> 0, 12px -> 1, 24px -> 2
+                const PADDING_PER_LEVEL = 12;
                 const paddingLeftStr = li.style.paddingLeft || window.getComputedStyle(li).paddingLeft || '0px';
                 const paddingVal = parseInt(paddingLeftStr, 10) || 0;
-                const depth = Math.round(paddingVal / 12);
+                const depth = Math.round(paddingVal / PADDING_PER_LEVEL);
 
                 // Update counters
                 // Ensure array is filled up to current depth
