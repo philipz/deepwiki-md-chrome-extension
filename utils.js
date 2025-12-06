@@ -43,9 +43,13 @@ function isValidDeepWikiUrl(url) {
     }
 
     // Strict hostname check to prevent matching malicious domains
-    // Only allow deepwiki.com or *.deepwiki.com
+    // Strict hostname check to prevent matching malicious domains
+    // Only allow deepwiki.com, *.deepwiki.com, or app.devin.ai
     const hostname = urlObj.hostname.toLowerCase();
-    if (hostname !== 'deepwiki.com' && !hostname.endsWith('.deepwiki.com')) {
+    const isDeepWiki = hostname === 'deepwiki.com' || hostname.endsWith('.deepwiki.com');
+    const isDevin = hostname === 'app.devin.ai';
+
+    if (!isDeepWiki && !isDevin) {
       return false;
     }
 

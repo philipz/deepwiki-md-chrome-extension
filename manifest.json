@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DeepWiki to Markdown",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Convert DeepWiki page content to Markdown format and save it",
   "permissions": [
     "downloads",
@@ -9,7 +9,8 @@
     "webNavigation"
   ],
   "host_permissions": [
-    "https://deepwiki.com/*"
+    "https://deepwiki.com/*",
+    "https://app.devin.ai/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -22,7 +23,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://deepwiki.com/*"
+        "https://deepwiki.com/*",
+        "https://app.devin.ai/*"
       ],
       "js": [
         "utils.js",
