@@ -570,10 +570,11 @@ async function startBatchProcessing(tabId) {
   let fileNamePrefix = '';
 
   if (urlObj.hostname.includes('devin.ai')) {
-    // Special case for Devin wiki URLs
-    if (pathSegments[0] === 'wiki') {
-      org = sanitizeName(pathSegments[1] || 'org', 'org');
-      project = sanitizeName(pathSegments[2] || 'project', 'project');
+    // Special case for Devin wiki URLs: /org/[org]/wiki/[user]/[project]
+    const wikiIndex = pathSegments.indexOf('wiki');
+    if (wikiIndex !== -1 && pathSegments[wikiIndex + 2]) {
+      org = sanitizeName(pathSegments[0] || 'org', 'org'); // Org is usually first
+      project = sanitizeName(pathSegments[wikiIndex + 2] || 'project', 'project');
     }
     fileNamePrefix = 'Devin-';
   }
@@ -581,7 +582,7 @@ async function startBatchProcessing(tabId) {
   // Decide folder name
   let calculatedFolderName;
   if (urlObj.hostname.includes('devin.ai')) {
-    calculatedFolderName = `${fileNamePrefix}${org}-${project}`;
+    calculatedFolderName = `${fileNamePrefix}${project}`; // Cleaner: just project name or Devin-Project
   } else {
     // Keep old behavior for DeepWiki Zip to avoid regression
     calculatedFolderName = sanitizeFolderName(extraction.headTitle || extraction.currentTitle || 'deepwiki');
@@ -645,9 +646,10 @@ async function startBatchSingleFileProcessing(tabId) {
 
   if (urlObj.hostname.includes('devin.ai')) {
     // Special case for Devin wiki URLs
-    if (pathSegments[0] === 'wiki') {
-      org = sanitizeName(pathSegments[1] || 'org', 'org');
-      project = sanitizeName(pathSegments[2] || 'project', 'project');
+    const wikiIndex = pathSegments.indexOf('wiki');
+    if (wikiIndex !== -1 && pathSegments[wikiIndex + 2]) {
+      org = sanitizeName(pathSegments[0] || 'org', 'org');
+      project = sanitizeName(pathSegments[wikiIndex + 2] || 'project', 'project');
     }
     // User requested "Devin-" prefix for Devin downloads
     fileNamePrefix = 'Devin-';
