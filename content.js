@@ -220,12 +220,9 @@ if (!ALLOW_SCRIPT_EXECUTION) {
                 }
 
                 // Second pass filter for Org Name / Workspace selector
-                // We do this separately to keep logic clean or just chain it.
-                // Let's filter navButtons directly.
                 const finalButtons = navButtons.filter(btn => {
                   const text = btn.innerText.trim();
                   if (orgName && text.toLowerCase().includes(orgName.toLowerCase())) return false;
-                  if (text.includes('Philip Zheng')) return false; // Hardcoded safety
                   return true;
                 });
 
@@ -242,47 +239,65 @@ if (!ALLOW_SCRIPT_EXECUTION) {
                 });
 
                 // Calculate indentation baseline
-                // We assume the leftmost items are the parents (Level 0).
-                // Any item significantly indented from the minimum 'left' is considered a child/sub-section.
                 if (counters.length > 0) {
                   const minLeft = Math.min(...counters.map(c => c.left));
-                  const INDENT_THRESHOLD = 8; // Parents are at X, Children at X+12. Threshold of 8 is safe.
+                  const INDENT_THRESHOLD = 8;
 
-                  const topLevelItems = counters.filter(item => {
-                    return (item.left - minLeft) < INDENT_THRESHOLD;
+                  // Support Level 2 pages (Hierarchy) by removing the strict filter
+                  // and calculating prefixes (1, 1.1, 1.2, 2...)
+                  let hierarchyStack = [0];
+
+                  // Determine Base URL for Wiki
+                  const pathParts = window.location.pathname.split('/');
+                  const wikiIndex = pathParts.indexOf('wiki');
+                  let wikiBaseUrl = window.location.origin;
+
+                  if (wikiIndex !== -1 && pathParts[wikiIndex + 2]) {
+                    // Path structure: /org/[org]/wiki/[user]/[project]
+                    // wikiIndex points to 'wiki'. 
+                    // +1 is [user], +2 is [project].
+                    // We need to capture up to [project].
+                    // slice is exclusive, so +3.
+                    const basePath = pathParts.slice(0, wikiIndex + 3).join('/');
+                    wikiBaseUrl += basePath;
+                  }
+
+                  sidebarLinks = counters.map((item) => {
+                    // Determine Level based on indentation
+                    const offset = item.left - minLeft;
+                    const level = offset < INDENT_THRESHOLD ? 0 : 1;
+
+                    // Update Hierarchy Stack
+                    if (level > hierarchyStack.length - 1) {
+                      hierarchyStack.push(1);
+                    } else if (level < hierarchyStack.length - 1) {
+                      while (hierarchyStack.length - 1 > level) {
+                        hierarchyStack.pop();
+                      }
+                      hierarchyStack[level]++;
+                    } else {
+                      hierarchyStack[level]++;
+                    }
+
+                    const prefix = hierarchyStack.join('.');
+
+                    // Use Hash-based navigation as this seems to be the pattern for sub-sections
+                    // e.g. .../project#1.1
+                    // This avoids full page reloads and 404s on synthesized paths.
+                    const fullUrl = `${wikiBaseUrl}#${prefix}`;
+
+                    return {
+                      getAttribute: (attr) => (attr === 'href' ? fullUrl : null),
+                      textContent: item.text,
+                      href: fullUrl,
+                      text: item.text,
+                      hierarchicalTitle: `${prefix} ${item.text}`
+                    };
                   });
 
                   if (DEBUG_MODE) {
-                    console.log(`DeepWiki: Found ${counters.length} visible buttons. Baseline Left: ${minLeft}px.`);
-                    console.log(`DeepWiki: Filtered to ${topLevelItems.length} top-level items (Depth 0).`);
+                    console.log(`DeepWiki: Found ${sidebarLinks.length} total pages (Level 1 & 2).`);
                   }
-
-                  // Construct final links from top-level items only
-                  // We reset counters logic because we are now treating top-level items as the ONLY items.
-                  // We use a simple slug generation since we aren't doing hierarchical 1.2.3 numbering anymore (or maybe we should?).
-                  // If user wants 11 pages, let's just give them the pages.
-
-                  sidebarLinks = topLevelItems.map((item, index) => {
-                    const slug = item.text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-                    // We still need unique hashes if we want to navigate (though we found they are hash-only links)
-                    // Actually, if we are downloading them, we need to click them to load content?
-                    // Or do they share the same content?
-                    // As discovered, clicking them changes the hash. 
-                    // If we want to distinct files, we generate unique hrefs.
-
-                    // Use index-based prefix to ensure unique filenames and order
-                    const prefix = (index + 1).toString();
-                    const hash = `#${prefix}-${slug}`;
-
-                    return {
-                      getAttribute: (attr) => (attr === 'href' ? hash : null),
-                      textContent: item.text,
-                      href: window.location.origin + window.location.pathname + hash,
-                      // Mimic the button's behavior? No, extension logic click handlers/navigation will handle valid URLs?
-                      // Wait, navigateToPage uses URL. If valid URL, it navigates.
-                      // If it's a hash change, it updates.
-                    };
-                  });
                 }
               }
             } else {
@@ -305,19 +320,33 @@ if (!ALLOW_SCRIPT_EXECUTION) {
           let pages = sidebarLinks.map(link => {
             return {
               url: new URL(link.getAttribute('href'), baseUrl).href,
-              title: link.textContent.trim(),
+              // Use hierarchical title (1.1 Title) if available, otherwise fallback to text content
+              title: link.hierarchicalTitle || link.textContent.trim(),
               selected: link.getAttribute('data-selected') === 'true'
             };
           });
 
           // Filter out pages that strictly don't belong to the current project path
-          // This prevents "Back" buttons or "Home" crumbs from being included (e.g. /wiki)
-          // especially when the fallback selector picks up navigation links.
-          const currentPathPrefix = window.location.origin + window.location.pathname;
-          pages = pages.filter(page => page.url.startsWith(currentPathPrefix));
+          // For Devin, we calculate a Wiki Base URL (project root) and should filter by that.
+          // For generic sites, we might stick to currentPathPrefix but it's risky for siblings.
+
+          let filterPrefix = window.location.origin + window.location.pathname;
+
+          // If we are on Devin and detected a wiki base, use it
+          if (hostname.includes('devin.ai')) {
+            const pathParts = window.location.pathname.split('/');
+            const wikiIndex = pathParts.indexOf('wiki');
+            // Capture up to project name: /org/[org]/wiki/[user]/[project]
+            if (wikiIndex !== -1 && pathParts[wikiIndex + 2]) {
+              const basePath = pathParts.slice(0, wikiIndex + 3).join('/');
+              filterPrefix = window.location.origin + basePath;
+            }
+          }
+
+          pages = pages.filter(page => page.url.startsWith(filterPrefix));
 
           if (DEBUG_MODE) {
-            console.log(`Extracted ${pages.length} valid pages for current scope:`, pages);
+            console.log(`Extracted ${pages.length} valid pages (Prefix: ${filterPrefix}):`, pages);
           }
 
           // Get current page information for return
@@ -373,8 +402,13 @@ if (!ALLOW_SCRIPT_EXECUTION) {
       // Acknowledge receipt of message to avoid connection errors
       sendResponse({ received: true });
     }
-    // Always return true for asynchronous sendResponse handling
-    return true;
+
+    // Only return true for asynchronous actions that will call sendResponse later
+    if (request.action === "extractAllPages" || request.action === "convertToMarkdown") {
+      return true;
+    }
+    // For synchronous actions (like pageLoaded, tabActivated), we already called sendResponse above
+    return false;
   });
 
   // Helper: Extract lines of text from an element, handling tspans and other children

@@ -2,6 +2,10 @@ importScripts('lib/jszip.min.js');
 importScripts('utils.js');
 
 const MESSAGE_TIMEOUT = 30000;
+// Delay constants for page rendering to avoid rate limiting and ensure content loads
+const PAGE_RENDER_BASE_DELAY = 3000;
+const PAGE_RENDER_JITTER = 1000;
+
 const messageQueue = {};
 
 // Utility functions (sanitizeName and isValidDeepWikiUrl) are now loaded from utils.js
@@ -38,6 +42,14 @@ function markTabPending(tabId) {
     return;
   }
   messageQueue[tabId].isReady = false;
+}
+
+function markTabReady(tabId) {
+  if (!messageQueue[tabId]) {
+    messageQueue[tabId] = { isReady: true, queue: [] };
+  } else {
+    messageQueue[tabId].isReady = true;
+  }
 }
 
 function dispatchMessageToTab(tabId, item) {
@@ -315,8 +327,8 @@ async function processSinglePage(page) {
   if (batchState.cancelRequested) return;
 
   // Wait for dynamic content to render.
-  // Increased to 5000ms (5s) + random buffer to avoid rate limiting and ensure large pages load.
-  const delay = 5000 + Math.random() * 2000;
+  // Increased to PAGE_RENDER_BASE_DELAY + random buffer to avoid rate limiting and ensure large pages load.
+  const delay = PAGE_RENDER_BASE_DELAY + Math.random() * PAGE_RENDER_JITTER;
   await new Promise(resolve => setTimeout(resolve, delay));
 
   const convertResponse = await sendMessageToTab(batchState.tabId, { action: 'convertToMarkdown' });
@@ -736,12 +748,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       return;
     }
 
-    if (!messageQueue[tabId]) {
-      messageQueue[tabId] = { isReady: true, queue: [] };
-    } else {
-      messageQueue[tabId].isReady = true;
+    markTabReady(tabId);
+    if (typeof DEBUG_MODE !== 'undefined' && DEBUG_MODE) {
+      console.log(`DeepWiki Background: Received contentScriptReady from tab ${tabId}. Flushing queue...`);
     }
-    console.log(`DeepWiki Background: Received contentScriptReady from tab ${tabId}. Flushing queue...`);
     flushMessageQueue(tabId);
     sendResponse({ status: 'ready' });
     return;
@@ -798,7 +808,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     return;
   }
 
-  if (changeInfo.status === 'loading' || changeInfo.status === 'complete') {
+  if (changeInfo.status === 'loading') {
     markTabPending(tabId);
   }
 
@@ -809,11 +819,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         console.log('Page loaded ping error:', error.message);
       } else if (!error) {
         // Ping succeeded, so content script is ready!
-        if (!messageQueue[tabId]) {
-          messageQueue[tabId] = { isReady: true, queue: [] };
-        } else {
-          messageQueue[tabId].isReady = true;
-        }
+        markTabReady(tabId);
         flushMessageQueue(tabId);
       }
     });
@@ -830,11 +836,7 @@ chrome.tabs.onActivated.addListener(activeInfo => {
           console.log('Tab activated ping error:', error.message);
         } else if (!error) {
           // Ping succeeded, mark as ready
-          if (!messageQueue[activeInfo.tabId]) {
-            messageQueue[activeInfo.tabId] = { isReady: true, queue: [] };
-          } else {
-            messageQueue[activeInfo.tabId].isReady = true;
-          }
+          markTabReady(activeInfo.tabId);
           flushMessageQueue(activeInfo.tabId);
         }
       });
