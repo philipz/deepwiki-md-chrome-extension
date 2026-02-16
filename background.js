@@ -573,7 +573,7 @@ async function startBatchProcessing(tabId) {
     // Special case for Devin wiki URLs: /org/[org]/wiki/[user]/[project]
     const wikiIndex = pathSegments.indexOf('wiki');
     if (wikiIndex !== -1 && pathSegments[wikiIndex + 2]) {
-      org = sanitizeName(pathSegments[0] || 'org', 'org'); // Org is usually first
+      org = sanitizeName(pathSegments[1] || 'org', 'org'); // Org is usually first
       project = sanitizeName(pathSegments[wikiIndex + 2] || 'project', 'project');
     }
     fileNamePrefix = 'Devin-';
@@ -648,7 +648,7 @@ async function startBatchSingleFileProcessing(tabId) {
     // Special case for Devin wiki URLs
     const wikiIndex = pathSegments.indexOf('wiki');
     if (wikiIndex !== -1 && pathSegments[wikiIndex + 2]) {
-      org = sanitizeName(pathSegments[0] || 'org', 'org');
+      org = sanitizeName(pathSegments[1] || 'org', 'org');
       project = sanitizeName(pathSegments[wikiIndex + 2] || 'project', 'project');
     }
     // User requested "Devin-" prefix for Devin downloads
