@@ -108,7 +108,27 @@ function sendMessageToTab(tabId, message) {
   const tryDirect = () => attemptDirectMessage(tabId, message);
 
   if (entry && entry.isReady) {
-    return tryDirect();
+    return tryDirect().catch(error => {
+      // If a "ready" tab fails, it might be effectively dead/orphaned (e.g. extension updated).
+      // We should re-evaluate if we should queue or fail.
+      if (shouldQueueForError(error)) {
+        // Check tab status to see if we should really queue
+        return new Promise((resolve, reject) => {
+          chrome.tabs.get(tabId, (tab) => {
+            if (chrome.runtime.lastError || !tab) {
+              reject(new Error('Tab no longer exists.'));
+              return;
+            }
+
+            // Connection failed despite isReady=true (maybe refreshed?).
+            // Mark as not ready and Queue.
+            entry.isReady = false;
+            queueMessageForTab(tabId, message, resolve, reject);
+          });
+        });
+      }
+      throw error;
+    });
   }
 
   return tryDirect().catch(error => {
@@ -117,7 +137,19 @@ function sendMessageToTab(tabId, message) {
     }
 
     return new Promise((resolve, reject) => {
-      queueMessageForTab(tabId, message, resolve, reject);
+      // Before queuing, check if the tab still exists
+      chrome.tabs.get(tabId, (tab) => {
+        if (chrome.runtime.lastError || !tab) {
+          reject(new Error('Tab no longer exists.'));
+          return;
+        }
+
+        // Even if the tab is complete, the content script might effectively be
+        // "loading" or re-initializing (e.g. after a reload). 
+        // We should queue the message and wait for 'contentScriptReady'.
+        // If it never comes, the queue timeout (MESSAGE_TIMEOUT) will handle it.
+        queueMessageForTab(tabId, message, resolve, reject);
+      });
     });
   });
 }
@@ -282,8 +314,10 @@ async function processSinglePage(page) {
   await navigateToPage(batchState.tabId, page.url);
   if (batchState.cancelRequested) return;
 
-  // Wait for dynamic content (Mermaid diagrams) to render
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  // Wait for dynamic content to render.
+  // Increased to 5000ms (5s) + random buffer to avoid rate limiting and ensure large pages load.
+  const delay = 5000 + Math.random() * 2000;
+  await new Promise(resolve => setTimeout(resolve, delay));
 
   const convertResponse = await sendMessageToTab(batchState.tabId, { action: 'convertToMarkdown' });
   if (!convertResponse || !convertResponse.success) {
@@ -707,6 +741,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     } else {
       messageQueue[tabId].isReady = true;
     }
+    console.log(`DeepWiki Background: Received contentScriptReady from tab ${tabId}. Flushing queue...`);
     flushMessageQueue(tabId);
     sendResponse({ status: 'ready' });
     return;
@@ -772,6 +807,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       const error = chrome.runtime.lastError;
       if (error && !error.message.includes('Receiving end does not exist')) {
         console.log('Page loaded ping error:', error.message);
+      } else if (!error) {
+        // Ping succeeded, so content script is ready!
+        if (!messageQueue[tabId]) {
+          messageQueue[tabId] = { isReady: true, queue: [] };
+        } else {
+          messageQueue[tabId].isReady = true;
+        }
+        flushMessageQueue(tabId);
       }
     });
   }
@@ -785,6 +828,14 @@ chrome.tabs.onActivated.addListener(activeInfo => {
         const error = chrome.runtime.lastError;
         if (error && !error.message.includes('Receiving end does not exist')) {
           console.log('Tab activated ping error:', error.message);
+        } else if (!error) {
+          // Ping succeeded, mark as ready
+          if (!messageQueue[activeInfo.tabId]) {
+            messageQueue[activeInfo.tabId] = { isReady: true, queue: [] };
+          } else {
+            messageQueue[activeInfo.tabId].isReady = true;
+          }
+          flushMessageQueue(activeInfo.tabId);
         }
       });
     }
