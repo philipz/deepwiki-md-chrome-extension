@@ -2,6 +2,10 @@ importScripts('lib/jszip.min.js');
 importScripts('utils.js');
 
 const MESSAGE_TIMEOUT = 30000;
+// Delay constants for page rendering to avoid rate limiting and ensure content loads
+const PAGE_RENDER_BASE_DELAY = 3000;
+const PAGE_RENDER_JITTER = 1000;
+
 const messageQueue = {};
 
 // Utility functions (sanitizeName and isValidDeepWikiUrl) are now loaded from utils.js
@@ -38,6 +42,14 @@ function markTabPending(tabId) {
     return;
   }
   messageQueue[tabId].isReady = false;
+}
+
+function markTabReady(tabId) {
+  if (!messageQueue[tabId]) {
+    messageQueue[tabId] = { isReady: true, queue: [] };
+  } else {
+    messageQueue[tabId].isReady = true;
+  }
 }
 
 function dispatchMessageToTab(tabId, item) {
@@ -108,7 +120,27 @@ function sendMessageToTab(tabId, message) {
   const tryDirect = () => attemptDirectMessage(tabId, message);
 
   if (entry && entry.isReady) {
-    return tryDirect();
+    return tryDirect().catch(error => {
+      // If a "ready" tab fails, it might be effectively dead/orphaned (e.g. extension updated).
+      // We should re-evaluate if we should queue or fail.
+      if (shouldQueueForError(error)) {
+        // Check tab status to see if we should really queue
+        return new Promise((resolve, reject) => {
+          chrome.tabs.get(tabId, (tab) => {
+            if (chrome.runtime.lastError || !tab) {
+              reject(new Error('Tab no longer exists.'));
+              return;
+            }
+
+            // Connection failed despite isReady=true (maybe refreshed?).
+            // Mark as not ready and Queue.
+            entry.isReady = false;
+            queueMessageForTab(tabId, message, resolve, reject);
+          });
+        });
+      }
+      throw error;
+    });
   }
 
   return tryDirect().catch(error => {
@@ -117,7 +149,19 @@ function sendMessageToTab(tabId, message) {
     }
 
     return new Promise((resolve, reject) => {
-      queueMessageForTab(tabId, message, resolve, reject);
+      // Before queuing, check if the tab still exists
+      chrome.tabs.get(tabId, (tab) => {
+        if (chrome.runtime.lastError || !tab) {
+          reject(new Error('Tab no longer exists.'));
+          return;
+        }
+
+        // Even if the tab is complete, the content script might effectively be
+        // "loading" or re-initializing (e.g. after a reload). 
+        // We should queue the message and wait for 'contentScriptReady'.
+        // If it never comes, the queue timeout (MESSAGE_TIMEOUT) will handle it.
+        queueMessageForTab(tabId, message, resolve, reject);
+      });
     });
   });
 }
@@ -282,8 +326,10 @@ async function processSinglePage(page) {
   await navigateToPage(batchState.tabId, page.url);
   if (batchState.cancelRequested) return;
 
-  // Wait for dynamic content (Mermaid diagrams) to render
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  // Wait for dynamic content to render.
+  // Increased to PAGE_RENDER_BASE_DELAY + random buffer to avoid rate limiting and ensure large pages load.
+  const delay = PAGE_RENDER_BASE_DELAY + Math.random() * PAGE_RENDER_JITTER;
+  await new Promise(resolve => setTimeout(resolve, delay));
 
   const convertResponse = await sendMessageToTab(batchState.tabId, { action: 'convertToMarkdown' });
   if (!convertResponse || !convertResponse.success) {
@@ -524,10 +570,11 @@ async function startBatchProcessing(tabId) {
   let fileNamePrefix = '';
 
   if (urlObj.hostname.includes('devin.ai')) {
-    // Special case for Devin wiki URLs
-    if (pathSegments[0] === 'wiki') {
-      org = sanitizeName(pathSegments[1] || 'org', 'org');
-      project = sanitizeName(pathSegments[2] || 'project', 'project');
+    // Special case for Devin wiki URLs: /org/[org]/wiki/[user]/[project]
+    const wikiIndex = pathSegments.indexOf('wiki');
+    if (wikiIndex !== -1 && pathSegments[wikiIndex + 2]) {
+      org = sanitizeName(pathSegments[1] || 'org', 'org'); // Org is usually first
+      project = sanitizeName(pathSegments[wikiIndex + 2] || 'project', 'project');
     }
     fileNamePrefix = 'Devin-';
   }
@@ -535,7 +582,7 @@ async function startBatchProcessing(tabId) {
   // Decide folder name
   let calculatedFolderName;
   if (urlObj.hostname.includes('devin.ai')) {
-    calculatedFolderName = `${fileNamePrefix}${org}-${project}`;
+    calculatedFolderName = `${fileNamePrefix}${project}`; // Cleaner: just project name or Devin-Project
   } else {
     // Keep old behavior for DeepWiki Zip to avoid regression
     calculatedFolderName = sanitizeFolderName(extraction.headTitle || extraction.currentTitle || 'deepwiki');
@@ -599,9 +646,10 @@ async function startBatchSingleFileProcessing(tabId) {
 
   if (urlObj.hostname.includes('devin.ai')) {
     // Special case for Devin wiki URLs
-    if (pathSegments[0] === 'wiki') {
+    const wikiIndex = pathSegments.indexOf('wiki');
+    if (wikiIndex !== -1 && pathSegments[wikiIndex + 2]) {
       org = sanitizeName(pathSegments[1] || 'org', 'org');
-      project = sanitizeName(pathSegments[2] || 'project', 'project');
+      project = sanitizeName(pathSegments[wikiIndex + 2] || 'project', 'project');
     }
     // User requested "Devin-" prefix for Devin downloads
     fileNamePrefix = 'Devin-';
@@ -702,10 +750,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       return;
     }
 
-    if (!messageQueue[tabId]) {
-      messageQueue[tabId] = { isReady: true, queue: [] };
-    } else {
-      messageQueue[tabId].isReady = true;
+    markTabReady(tabId);
+    if (typeof DEBUG_MODE !== 'undefined' && DEBUG_MODE) {
+      console.log(`DeepWiki Background: Received contentScriptReady from tab ${tabId}. Flushing queue...`);
     }
     flushMessageQueue(tabId);
     sendResponse({ status: 'ready' });
@@ -763,7 +810,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     return;
   }
 
-  if (changeInfo.status === 'loading' || changeInfo.status === 'complete') {
+  if (changeInfo.status === 'loading') {
     markTabPending(tabId);
   }
 
@@ -772,6 +819,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       const error = chrome.runtime.lastError;
       if (error && !error.message.includes('Receiving end does not exist')) {
         console.log('Page loaded ping error:', error.message);
+      } else if (!error) {
+        // Ping succeeded, so content script is ready!
+        markTabReady(tabId);
+        flushMessageQueue(tabId);
       }
     });
   }
@@ -785,6 +836,10 @@ chrome.tabs.onActivated.addListener(activeInfo => {
         const error = chrome.runtime.lastError;
         if (error && !error.message.includes('Receiving end does not exist')) {
           console.log('Tab activated ping error:', error.message);
+        } else if (!error) {
+          // Ping succeeded, mark as ready
+          markTabReady(activeInfo.tabId);
+          flushMessageQueue(activeInfo.tabId);
         }
       });
     }
