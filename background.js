@@ -31,12 +31,10 @@ async function ensureContentScript(tabId) {
 
   // Re-inject content script
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ['content.js']
-    });
-    // Wait for contentScriptReady signal
-    await new Promise((resolve, reject) => {
+    // Register listener BEFORE executeScript to avoid race condition:
+    // content.js sends contentScriptReady synchronously during execution,
+    // and executeScript resolves only after the script finishes running.
+    const readyPromise = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         chrome.runtime.onMessage.removeListener(readyHandler);
         reject(new Error('Content script injection timeout'));
@@ -50,6 +48,11 @@ async function ensureContentScript(tabId) {
       }
       chrome.runtime.onMessage.addListener(readyHandler);
     });
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content.js']
+    });
+    await readyPromise;
     markTabReady(tabId);
   } catch (e) {
     throw new Error('Content script not available. Please refresh the page and try again.');
@@ -854,6 +857,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'getBatchStatus') {
     sendResponse(getBatchStatusPayload());
     return;
+  }
+
+  if (request.action === 'ensureContentScript') {
+    const tabId = request.tabId;
+    if (typeof tabId !== 'number') {
+      sendResponse({ success: false, error: 'Missing tabId.' });
+      return;
+    }
+    ensureContentScript(tabId)
+      .then(() => sendResponse({ success: true }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
   }
 
   if (request.action === 'pageLoaded' || request.action === 'tabActivated') {

@@ -11,18 +11,15 @@ async function sendMessageWithRetry(tabId, message) {
       error.message.includes('Receiving end does not exist') ||
       error.message.includes('Could not establish connection')
     )) {
-      // Content script not loaded, re-inject
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          files: ['content.js']
-        });
-      } catch (injectError) {
-        throw new Error('Failed to inject content script. Please refresh the page.');
+      // Delegate injection to background script which has robust
+      // readiness handling (contentScriptReady listener + messageQueue)
+      const result = await chrome.runtime.sendMessage({
+        action: 'ensureContentScript', tabId
+      });
+      if (!result || !result.success) {
+        throw new Error(result?.error || 'Failed to inject content script. Please refresh the page.');
       }
-      // Wait for content script to initialize
-      await new Promise(r => setTimeout(r, 1000));
-      // Retry
+      // Retry after background confirms content script is ready
       return await chrome.tabs.sendMessage(tabId, message);
     }
     throw error;
