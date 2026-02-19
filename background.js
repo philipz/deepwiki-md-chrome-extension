@@ -20,6 +20,7 @@ async function ensureContentScript(tabId) {
     ]);
     if (response && response.pong) {
       markTabReady(tabId);
+      flushMessageQueue(tabId);
       return;
     }
   } catch (e) {
