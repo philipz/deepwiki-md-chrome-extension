@@ -6,7 +6,8 @@
   "permissions": [
     "downloads",
     "tabs",
-    "webNavigation"
+    "webNavigation",
+    "scripting"
   ],
   "host_permissions": [
     "https://deepwiki.com/*",

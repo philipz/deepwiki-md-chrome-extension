@@ -1,5 +1,34 @@
 // Utility functions are now loaded from utils.js
 
+// Helper: Send a message to a tab's content script with auto-retry.
+// If the content script is not loaded (e.g., extension reloaded without page refresh),
+// re-inject it and retry the message.
+async function sendMessageWithRetry(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (error) {
+    if (error.message && (
+      error.message.includes('Receiving end does not exist') ||
+      error.message.includes('Could not establish connection')
+    )) {
+      // Content script not loaded, re-inject
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: ['content.js']
+        });
+      } catch (injectError) {
+        throw new Error('Failed to inject content script. Please refresh the page.');
+      }
+      // Wait for content script to initialize
+      await new Promise(r => setTimeout(r, 1000));
+      // Retry
+      return await chrome.tabs.sendMessage(tabId, message);
+    }
+    throw error;
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const convertBtn = document.getElementById('convertBtn');
   const batchDownloadBtn = document.getElementById('batchDownloadBtn');
@@ -25,7 +54,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       showStatus('Converting page...', 'info');
-      const response = await chrome.tabs.sendMessage(tab.id, { action: 'convertToMarkdown' });
+      const response = await sendMessageWithRetry(tab.id, { action: 'convertToMarkdown' });
 
       if (response && response.success) {
         const headTitle = sanitizeName(response.headTitle || '', '');
