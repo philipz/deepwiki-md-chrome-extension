@@ -10,6 +10,56 @@ const messageQueue = {};
 
 // Utility functions (sanitizeName and isValidDeepWikiUrl) are now loaded from utils.js
 
+// Ensure the content script is loaded and responsive in a tab.
+// If not, re-inject it using chrome.scripting.executeScript.
+async function ensureContentScript(tabId) {
+  try {
+    const response = await Promise.race([
+      attemptDirectMessage(tabId, { action: 'ping' }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Ping timeout')), 3000))
+    ]);
+    if (response && response.pong) {
+      markTabReady(tabId);
+      flushMessageQueue(tabId);
+      return;
+    }
+  } catch (e) {
+    // Content script not responding, need to re-inject
+    if (typeof DEBUG_MODE !== 'undefined' && DEBUG_MODE) {
+      console.log(`Content script not responding on tab ${tabId}: ${e.message}. Re-injecting...`);
+    }
+  }
+
+  // Re-inject content script
+  try {
+    // Register listener BEFORE executeScript to avoid race condition:
+    // content.js sends contentScriptReady synchronously during execution,
+    // and executeScript resolves only after the script finishes running.
+    const readyPromise = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        chrome.runtime.onMessage.removeListener(readyHandler);
+        reject(new Error('Content script injection timeout'));
+      }, 5000);
+      function readyHandler(msg, sender) {
+        if (msg.action === 'contentScriptReady' && sender.tab?.id === tabId) {
+          clearTimeout(timeout);
+          chrome.runtime.onMessage.removeListener(readyHandler);
+          resolve();
+        }
+      }
+      chrome.runtime.onMessage.addListener(readyHandler);
+    });
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content.js']
+    });
+    await readyPromise;
+    markTabReady(tabId);
+  } catch (e) {
+    throw new Error('Content script not available. Please refresh the page and try again.');
+  }
+}
+
 const createInitialBatchState = () => ({
   isRunning: false,
   tabId: null,
@@ -550,6 +600,7 @@ async function startBatchProcessing(tabId) {
     throw new Error('Please open a valid DeepWiki documentation page (e.g., https://deepwiki.com/org/project) before starting batch conversion.');
   }
 
+  await ensureContentScript(tabId);
   const extraction = await sendMessageToTab(tabId, { action: 'extractAllPages' });
   if (!extraction || !extraction.success) {
     throw new Error(extraction?.error || 'Failed to extract sidebar links.');
@@ -625,6 +676,7 @@ async function startBatchSingleFileProcessing(tabId) {
     throw new Error('Please open a valid DeepWiki documentation page (e.g., https://deepwiki.com/org/project) before starting batch conversion.');
   }
 
+  await ensureContentScript(tabId);
   const extraction = await sendMessageToTab(tabId, { action: 'extractAllPages' });
   if (!extraction || !extraction.success) {
     throw new Error(extraction?.error || 'Failed to extract sidebar links.');
@@ -734,6 +786,18 @@ async function startBatchSingleFileProcessing(tabId) {
 // Listen for extension installation event
 chrome.runtime.onInstalled.addListener(() => {
   console.log('DeepWiki to Markdown extension installed');
+
+  // Auto-inject content script into existing matching tabs
+  // This ensures the extension works immediately after install/update without requiring a page refresh
+  chrome.tabs.query({ url: ['https://deepwiki.com/*', 'https://app.devin.ai/*'] }, (tabs) => {
+    if (chrome.runtime.lastError) return;
+    for (const tab of tabs) {
+      chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['content.js']
+      }).catch(() => { /* Tab might not be injectable */ });
+    }
+  });
 });
 
 // Listen for messages from content scripts and popup
@@ -794,6 +858,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'getBatchStatus') {
     sendResponse(getBatchStatusPayload());
     return;
+  }
+
+  if (request.action === 'ensureContentScript') {
+    const tabId = request.tabId;
+    if (typeof tabId !== 'number') {
+      sendResponse({ success: false, error: 'Missing tabId.' });
+      return;
+    }
+    ensureContentScript(tabId)
+      .then(() => sendResponse({ success: true }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
   }
 
   if (request.action === 'pageLoaded' || request.action === 'tabActivated') {

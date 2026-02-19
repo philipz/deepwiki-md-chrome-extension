@@ -1,43 +1,45 @@
-// Debug flag to control verbose logging (set to false in production)
-const DEBUG_MODE = true; // Hardcoded to true for debugging, or set to false for production
+; (function () {
+  // Version guard: supports re-injection after extension reload without page refresh
+  var __v = (window.__deepwikiVersion || 0) + 1;
+  window.__deepwikiVersion = __v;
 
-// Security check: Only allow local file access in debug mode or for test pages
-// For Devin.ai, we want to be permissive to ensure it runs
-const ALLOW_SCRIPT_EXECUTION = (function () {
-  const currentUrl = window.location.href;
-  const isLocalFile = currentUrl.startsWith('file://');
+  // Debug flag to control verbose logging (set to false in production)
+  const DEBUG_MODE = true; // Hardcoded to true for debugging, or set to false for production
 
-  if (!isLocalFile) {
-    // Always allow on non-local files (e.g., https://deepwiki.com, devin.ai)
-    return true;
-  }
+  // Security check: Only allow local file access in debug mode or for test pages
+  // For Devin.ai, we want to be permissive to ensure it runs
+  const ALLOW_SCRIPT_EXECUTION = (function () {
+    const currentUrl = window.location.href;
+    const isLocalFile = currentUrl.startsWith('file://');
 
-  // Check if it's a test page
-  const isTestPage = currentUrl.includes('test-page.html') || currentUrl.includes('/test/');
+    if (!isLocalFile) {
+      // Always allow on non-local files (e.g., https://deepwiki.com, devin.ai)
+      return true;
+    }
 
-  if (isTestPage) {
-    return true;
-  }
+    // Check if it's a test page
+    const isTestPage = currentUrl.includes('test-page.html') || currentUrl.includes('/test/');
 
-  // For other local files, only allow in debug mode
-  if (DEBUG_MODE) {
-    console.log('DeepWiki to Markdown: Running in DEBUG mode on local file');
-    return true;
-  }
+    if (isTestPage) {
+      return true;
+    }
 
-  // Block execution on other local files in production mode
-  console.info('DeepWiki to Markdown: Skipping local file (not a test page). Set DEBUG_MODE=true to enable.');
-  return false;
-})();
+    // For other local files, only allow in debug mode
+    if (DEBUG_MODE) {
+      console.log('DeepWiki to Markdown: Running in DEBUG mode on local file');
+      return true;
+    }
 
-// Early exit if script execution is not allowed
-if (!ALLOW_SCRIPT_EXECUTION) {
-  // Do nothing - silently skip execution
-  chrome.runtime.onMessage.addListener(() => {
-    // Respond to prevent "Receiving end does not exist" errors
+    // Block execution on other local files in production mode
+    console.info('DeepWiki to Markdown: Skipping local file (not a test page). Set DEBUG_MODE=true to enable.');
     return false;
-  });
-} else {
+  })();
+
+  // Early exit if script execution is not allowed.
+  // Intentionally no ping handler here: background must detect this instance
+  // as non-functional so it can trigger re-injection or proper error handling.
+  if (!ALLOW_SCRIPT_EXECUTION) return;
+
   // START OF EXTENSION LOGIC
   console.log("DeepWiki Content Script: Loaded and running on", window.location.href);
 
@@ -62,6 +64,15 @@ if (!ALLOW_SCRIPT_EXECUTION) {
 
   // Listen for messages from popup
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    // Version guard: ignore messages if a newer version of the script is active
+    if (window.__deepwikiVersion !== __v) return false;
+
+    // Ping handler for connectivity checks
+    if (request.action === "ping") {
+      sendResponse({ pong: true });
+      return false;
+    }
+
     if (request.action === "convertToMarkdown") {
       const MAX_RETRIES = 20;
       const RETRY_INTERVAL = 500;
@@ -605,4 +616,4 @@ if (!ALLOW_SCRIPT_EXECUTION) {
     });
     return content;
   }
-}
+})();

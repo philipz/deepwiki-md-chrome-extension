@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "DeepWiki to Markdown",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Convert DeepWiki page content to Markdown format and save it",
   "permissions": [
     "downloads",
     "tabs",
-    "webNavigation"
+    "webNavigation",
+    "scripting"
   ],
   "host_permissions": [
     "https://deepwiki.com/*",
