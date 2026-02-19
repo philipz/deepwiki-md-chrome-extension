@@ -37,10 +37,6 @@ async function ensureContentScript(tabId) {
   let readyTimeoutId;
   let readyHandler;
   const readyPromise = new Promise((resolve, reject) => {
-    readyTimeoutId = setTimeout(() => {
-      chrome.runtime.onMessage.removeListener(readyHandler);
-      reject(new Error('Content script injection timeout'));
-    }, 5000);
     readyHandler = function (msg, sender) {
       if (msg.action === 'contentScriptReady' && sender.tab?.id === tabId) {
         clearTimeout(readyTimeoutId);
@@ -48,6 +44,10 @@ async function ensureContentScript(tabId) {
         resolve();
       }
     };
+    readyTimeoutId = setTimeout(() => {
+      chrome.runtime.onMessage.removeListener(readyHandler);
+      reject(new Error('Content script injection timeout'));
+    }, 5000);
     chrome.runtime.onMessage.addListener(readyHandler);
   });
   try {
