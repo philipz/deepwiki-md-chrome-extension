@@ -31,31 +31,39 @@ async function ensureContentScript(tabId) {
   }
 
   // Re-inject content script
-  try {
-    // Register listener BEFORE executeScript to avoid race condition:
-    // content.js sends contentScriptReady synchronously during execution,
-    // and executeScript resolves only after the script finishes running.
-    const readyPromise = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
+  // Register listener BEFORE executeScript to avoid race condition:
+  // content.js sends contentScriptReady synchronously during execution,
+  // and executeScript resolves only after the script finishes running.
+  let readyTimeoutId;
+  let readyHandler;
+  const readyPromise = new Promise((resolve, reject) => {
+    readyHandler = function (msg, sender) {
+      if (msg.action === 'contentScriptReady' && sender.tab?.id === tabId) {
+        clearTimeout(readyTimeoutId);
         chrome.runtime.onMessage.removeListener(readyHandler);
-        reject(new Error('Content script injection timeout'));
-      }, 5000);
-      function readyHandler(msg, sender) {
-        if (msg.action === 'contentScriptReady' && sender.tab?.id === tabId) {
-          clearTimeout(timeout);
-          chrome.runtime.onMessage.removeListener(readyHandler);
-          resolve();
-        }
+        resolve();
       }
-      chrome.runtime.onMessage.addListener(readyHandler);
-    });
+    };
+    readyTimeoutId = setTimeout(() => {
+      chrome.runtime.onMessage.removeListener(readyHandler);
+      reject(new Error('Content script injection timeout'));
+    }, 5000);
+    chrome.runtime.onMessage.addListener(readyHandler);
+  });
+  try {
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ['content.js']
     });
     await readyPromise;
     markTabReady(tabId);
+    flushMessageQueue(tabId);
   } catch (e) {
+    // Clean up the readyPromise's timeout and listener to prevent
+    // unhandled promise rejection when executeScript fails.
+    clearTimeout(readyTimeoutId);
+    chrome.runtime.onMessage.removeListener(readyHandler);
+    readyPromise.catch(() => { }); // suppress the now-orphaned rejection
     throw new Error('Content script not available. Please refresh the page and try again.');
   }
 }

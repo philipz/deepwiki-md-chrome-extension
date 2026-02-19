@@ -414,8 +414,9 @@
       sendResponse({ received: true });
     }
 
-    // Only return true for asynchronous actions that will call sendResponse later
-    if (request.action === "extractAllPages" || request.action === "convertToMarkdown") {
+    // Only return true for asynchronous actions that will call sendResponse later.
+    // Note: convertToMarkdown already returns true inside its own if-block (line 146).
+    if (request.action === "extractAllPages") {
       return true;
     }
     // For synchronous actions (like pageLoaded, tabActivated), we already called sendResponse above
