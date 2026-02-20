@@ -936,18 +936,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           let count = 0;
           const allSvgs = document.querySelectorAll('svg[id^="mermaid-"]');
 
+          // 輔助函數：取得元素上的 React fiber key（__reactFiber$ 或 __reactInternalInstance$）
+          function getFiberKey(element) {
+            if (!element) return null;
+            return Object.keys(element).find(k =>
+              k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance')
+            ) || null;
+          }
+
           // Pass 1：從 SVG 父元素的 React fiber 向上遍歷，搜尋 mermaid 原始碼
-          // 搜尋 memoizedProps 中的 content/children/code/source/value 屬性，
-          // 若值以 mermaid 關鍵字開頭（flowchart、sequenceDiagram 等），即為原始碼。
-          // 搜尋深度上限 15 層（DeepWiki 約在第 12 層，Devin 約在第 8 層）。
           allSvgs.forEach(svg => {
             if (svg.getAttribute('data-mermaid-source')) return;
             try {
               const el = svg.closest('div') || svg.parentElement;
               if (!el) return;
-              const fiberKey = Object.keys(el).find(k =>
-                k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance')
-              );
+              const fiberKey = getFiberKey(el);
               if (!fiberKey) return;
               let fiber = el[fiberKey];
               for (let depth = 0; depth < 15 && fiber; depth++) {
@@ -992,9 +995,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (contentArea) {
               // Walk the fiber tree from a React-managed element
               const reactEl = contentArea.querySelector('[class]') || contentArea;
-              const fiberKey = Object.keys(reactEl).find(k =>
-                k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance')
-              );
+              const fiberKey = getFiberKey(reactEl);
               if (fiberKey) {
                 // BFS/DFS through fiber tree to find all mermaid content props
                 const visited = new Set();
@@ -1044,9 +1045,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               if (!el) return;
               // Check code element first, then pre element
               for (const target of [code, el]) {
-                const fk = Object.keys(target).find(k =>
-                  k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance')
-                );
+                const fk = getFiberKey(target);
                 if (!fk) continue;
                 let f = target[fk];
                 for (let d = 0; d < 8 && f; d++) {

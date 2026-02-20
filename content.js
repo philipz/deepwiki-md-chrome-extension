@@ -180,74 +180,10 @@
             // Devin AI sidebar logic
             if (DEBUG_MODE) console.log('Devin: Detecting sidebar links...');
 
-            // Strategy: Devin 2.0 uses buttons for sidebar items, not just UL/LI.
-            // We need to capture these buttons and generate hash links for them.
+            const finalButtons = findDevinSidebarButtons();
 
-            // 1. Find the sidebar container
-            let sidebarContainer = document.querySelector('div[class*="w-[--sidebar-main-width]"]');
-
-            // Fallback for sidebar detection if the class changes
-            if (!sidebarContainer || sidebarContainer.querySelectorAll('button').length === 0) {
-              // Try to find any vertical list of buttons on the left side
-              const potentialContainers = Array.from(document.querySelectorAll('div, aside, nav'));
-              const validContainer = potentialContainers.find(div => {
-                const rect = div.getBoundingClientRect();
-                // Check if it's on the left side and has decent height
-                if (rect.left > 100 || rect.width > 400 || rect.height < 300) return false;
-
-                // Must contain multiple buttons
-                const btns = div.querySelectorAll('button');
-                if (btns.length < 3) return false;
-
-                // Check if buttons look like nav items (text-align left, etc - heuristic)
-                return true;
-              });
-
-              if (validContainer) {
-                sidebarContainer = validContainer;
-                if (DEBUG_MODE) console.log('Devin: Found sidebar via generic left-column heuristic', sidebarContainer);
-              }
-            }
-
-            if (sidebarContainer) {
-              // Refined Selector: Only target BUTTONS. 
-              // Previous logic might have been too broad if it included 'a' tags disguised as buttons, 
-              // but querySelectorAll('button') should strict.
-              // We adding data-slot check if possible, but class check is fragile.
-              // The browser inspection showed wiki pages are <button> and others are <a>.
-              const buttons = Array.from(sidebarContainer.querySelectorAll('button'));
-
-              if (buttons.length > 0) {
+            if (finalButtons.length > 0) {
                 let counters = [];
-
-                // Filter buttons that are likely nav items
-                const navButtons = buttons.filter(btn => {
-                  const text = btn.innerText.trim();
-                  // Exclude common non-wiki buttons found in sidebar
-                  if (!text) return false;
-                  if (['Add repo', 'New chat', 'Import repository', 'Create new'].some(exclude => text.includes(exclude))) return false;
-
-                  // Ensure it's not a global nav item that somehow got implemented as a button
-                  // (Though inspection showed they are <a> tags, safety first)
-                  if (['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Back'].includes(text)) return false;
-
-                  return true;
-                });
-
-                // Extract Org Name from URL for exclusion (e.g. /org/philip-zheng/ -> Philip Zheng)
-                const pathParts = window.location.pathname.split('/');
-                const orgIndex = pathParts.indexOf('org');
-                let orgName = '';
-                if (orgIndex !== -1 && pathParts[orgIndex + 1]) {
-                  orgName = pathParts[orgIndex + 1].replace(/-/g, ' '); // philip-zheng -> philip zheng
-                }
-
-                // Second pass filter for Org Name / Workspace selector
-                const finalButtons = navButtons.filter(btn => {
-                  const text = btn.innerText.trim();
-                  if (orgName && text.toLowerCase().includes(orgName.toLowerCase())) return false;
-                  return true;
-                });
 
                 finalButtons.forEach((button, index) => {
                   const text = button.textContent.trim();
@@ -324,9 +260,6 @@
                     console.log(`DeepWiki: Found ${sidebarLinks.length} total pages (Level 1 & 2).`);
                   }
                 }
-              }
-            } else {
-              if (DEBUG_MODE) console.log("Devin: No sidebar container found.");
             }
 
             if (DEBUG_MODE) console.log(`Devin: Synthesized links found: ${sidebarLinks.length}`);
@@ -436,46 +369,12 @@
       if (DEBUG_MODE) console.log(`Devin: navigateDevinPage requested for buttonIndex=${buttonIndex}`);
 
       try {
-        // Re-find sidebar buttons using same logic as extractAllPages
-        let sidebarContainer = document.querySelector('div[class*="w-[--sidebar-main-width]"]');
-        if (!sidebarContainer || sidebarContainer.querySelectorAll('button').length === 0) {
-          const potentialContainers = Array.from(document.querySelectorAll('div, aside, nav'));
-          sidebarContainer = potentialContainers.find(div => {
-            const rect = div.getBoundingClientRect();
-            if (rect.left > 100 || rect.width > 400 || rect.height < 300) return false;
-            const btns = div.querySelectorAll('button');
-            return btns.length >= 3;
-          }) || null;
-        }
+        const finalButtons = findDevinSidebarButtons();
 
-        if (!sidebarContainer) {
+        if (finalButtons.length === 0) {
           sendResponse({ success: false, error: 'Sidebar container not found' });
           return;
         }
-
-        const buttons = Array.from(sidebarContainer.querySelectorAll('button'));
-
-        // Extract Org Name for filtering (same logic as extractAllPages)
-        const pathParts = window.location.pathname.split('/');
-        const orgIndex = pathParts.indexOf('org');
-        let orgName = '';
-        if (orgIndex !== -1 && pathParts[orgIndex + 1]) {
-          orgName = pathParts[orgIndex + 1].replace(/-/g, ' ');
-        }
-
-        const navButtons = buttons.filter(btn => {
-          const text = btn.innerText.trim();
-          if (!text) return false;
-          if (['Add repo', 'New chat', 'Import repository', 'Create new'].some(exclude => text.includes(exclude))) return false;
-          if (['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Back'].includes(text)) return false;
-          return true;
-        });
-
-        const finalButtons = navButtons.filter(btn => {
-          const text = btn.innerText.trim();
-          if (orgName && text.toLowerCase().includes(orgName.toLowerCase())) return false;
-          return true;
-        });
 
         if (buttonIndex < 0 || buttonIndex >= finalButtons.length) {
           sendResponse({ success: false, error: `Button index ${buttonIndex} out of range (${finalButtons.length} buttons)` });
@@ -536,6 +435,48 @@
     // For synchronous actions (like pageLoaded, tabActivated), we already called sendResponse above
     return false;
   });
+
+  // === Devin 側邊欄按鈕搜尋（共用邏輯）===
+  // extractAllPages 和 navigateDevinPage 都需要找到側邊欄按鈕，
+  // 提取為獨立函數避免重複，也確保兩邊的篩選結果一致。
+  function findDevinSidebarButtons() {
+    let sidebarContainer = document.querySelector('div[class*="w-[--sidebar-main-width]"]');
+
+    if (!sidebarContainer || sidebarContainer.querySelectorAll('button').length === 0) {
+      const potentialContainers = Array.from(document.querySelectorAll('div, aside, nav'));
+      sidebarContainer = potentialContainers.find(div => {
+        const rect = div.getBoundingClientRect();
+        if (rect.left > 100 || rect.width > 400 || rect.height < 300) return false;
+        const btns = div.querySelectorAll('button');
+        return btns.length >= 3;
+      }) || null;
+    }
+
+    if (!sidebarContainer) return [];
+
+    const buttons = Array.from(sidebarContainer.querySelectorAll('button'));
+
+    const navButtons = buttons.filter(btn => {
+      const text = btn.innerText.trim();
+      if (!text) return false;
+      if (['Add repo', 'New chat', 'Import repository', 'Create new'].some(exclude => text.includes(exclude))) return false;
+      if (['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Back'].includes(text)) return false;
+      return true;
+    });
+
+    const pathParts = window.location.pathname.split('/');
+    const orgIndex = pathParts.indexOf('org');
+    let orgName = '';
+    if (orgIndex !== -1 && pathParts[orgIndex + 1]) {
+      orgName = pathParts[orgIndex + 1].replace(/-/g, ' ');
+    }
+
+    return navButtons.filter(btn => {
+      const text = btn.innerText.trim();
+      if (orgName && text.toLowerCase().includes(orgName.toLowerCase())) return false;
+      return true;
+    });
+  }
 
   // Helper: Extract lines of text from an element, handling tspans and other children
   function extractLinesFromTextElement(element) {
