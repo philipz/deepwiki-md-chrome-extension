@@ -1005,7 +1005,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                   visited.add(fiber);
                   if (visited.size > 5000) break; // safety limit
                   if (fiber.memoizedProps) {
-                    for (const key of ['content', 'code', 'source', 'value']) {
+                    for (const key of ['content', 'children', 'code', 'source', 'value']) {
                       const val = fiber.memoizedProps[key];
                       if (typeof val === 'string' && val.length > 10 && MERMAID_KEYWORDS.test(val.trim())) {
                         allMermaidSources.push(val.trim());
