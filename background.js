@@ -80,7 +80,8 @@ const createInitialBatchState = () => ({
   cancelRequested: false,
   total: 0,
   currentTitle: '',
-  fileNames: new Set()
+  fileNames: new Set(),
+  isDevinButtonNav: false  // 是否使用按鈕點擊式導覽（Devin SPA 專用）
 });
 
 let batchState = createInitialBatchState();
@@ -308,6 +309,23 @@ async function restoreOriginalPage() {
   if (!batchState.tabId || !batchState.originalUrl) {
     return;
   }
+  // Devin 的 SPA 頁面還原：點擊第一個側邊欄按鈕回到首頁
+  // （因為 Devin 無法用 chrome.tabs.update 進行 URL 導覽）
+  if (batchState.isDevinButtonNav) {
+    try {
+      await sendMessageToTab(batchState.tabId, {
+        action: 'navigateDevinPage',
+        buttonIndex: 0
+      });
+    } catch (error) {
+      if (typeof DEBUG_MODE !== 'undefined' && DEBUG_MODE) {
+        console.debug('Failed to restore Devin page via button click:', error.message);
+      }
+    } finally {
+      batchState.originalUrl = null;
+    }
+    return;
+  }
   try {
     await navigateToPage(batchState.tabId, batchState.originalUrl);
   } catch (error) {
@@ -381,7 +399,20 @@ async function processSinglePage(page) {
     message: `Processing ${currentStep}/${batchState.total}: ${page.title}`
   });
 
-  await navigateToPage(batchState.tabId, page.url);
+  if (batchState.isDevinButtonNav && page.buttonIndex !== undefined) {
+    // Devin SPA 頁面切換：透過點擊側邊欄按鈕取代 URL 導覽，
+    // 避免 SPA 將合成的 hash URL 重新導向到 wiki 首頁
+    const navResponse = await sendMessageToTab(batchState.tabId, {
+      action: 'navigateDevinPage',
+      buttonIndex: page.buttonIndex
+    });
+    if (!navResponse || !navResponse.success) {
+      throw new Error(navResponse?.error || 'Devin button navigation failed');
+    }
+  } else {
+    await navigateToPage(batchState.tabId, page.url);
+  }
+
   if (batchState.cancelRequested) return;
 
   // Wait for dynamic content to render.
@@ -659,7 +690,8 @@ async function startBatchProcessing(tabId) {
     cancelRequested: false,
     total: pages.length,
     currentTitle: '',
-    fileNames: new Set()
+    fileNames: new Set(),
+    isDevinButtonNav: !!extraction.isDevinButtonNav  // 由 content.js 回傳，標記是否為 Devin 站台
   };
 
   broadcastBatchUpdate('started', {
@@ -739,7 +771,8 @@ async function startBatchSingleFileProcessing(tabId) {
       cancelRequested: false,
       total: pages.length,
       currentTitle: '',
-      fileNames: new Set()
+      fileNames: new Set(),
+      isDevinButtonNav: false
     };
 
     broadcastBatchUpdate('started', {
@@ -776,7 +809,8 @@ async function startBatchSingleFileProcessing(tabId) {
     cancelRequested: false,
     total: pages.length,
     currentTitle: '',
-    fileNames: new Set()
+    fileNames: new Set(),
+    isDevinButtonNav: !!extraction.isDevinButtonNav  // 由 content.js 回傳，標記是否為 Devin 站台
   };
 
   broadcastBatchUpdate('started', {
@@ -877,6 +911,178 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     ensureContentScript(tabId)
       .then(() => sendResponse({ success: true }))
       .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === 'extractMermaidSources') {
+    // === 在 MAIN world 執行 React fiber 擷取 ===
+    // 目的：從 React 的內部資料結構中擷取 mermaid 原始碼和程式碼語言資訊。
+    // 原因：content script 在隔離的 world 中無法存取 __reactFiber$，
+    //       而 CSP 又阻擋了 inline script，只能透過 chrome.scripting.executeScript
+    //       以 world: 'MAIN' 在頁面的主執行環境中執行。
+    // 結果：擷取到的資訊寫入 DOM 屬性（data-mermaid-source / data-code-language），
+    //       content script 可以從隔離 world 中讀取（因為 DOM 是共享的）。
+    const tabId = sender.tab?.id;
+    if (!tabId) {
+      sendResponse({ success: false, error: 'No tab ID' });
+      return;
+    }
+    chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: () => {
+        try {
+          const MERMAID_KEYWORDS = /^(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|gitGraph|mindmap)\b/;
+          let count = 0;
+          const allSvgs = document.querySelectorAll('svg[id^="mermaid-"]');
+
+          // Pass 1：從 SVG 父元素的 React fiber 向上遍歷，搜尋 mermaid 原始碼
+          // 搜尋 memoizedProps 中的 content/children/code/source/value 屬性，
+          // 若值以 mermaid 關鍵字開頭（flowchart、sequenceDiagram 等），即為原始碼。
+          // 搜尋深度上限 15 層（DeepWiki 約在第 12 層，Devin 約在第 8 層）。
+          allSvgs.forEach(svg => {
+            if (svg.getAttribute('data-mermaid-source')) return;
+            try {
+              const el = svg.closest('div') || svg.parentElement;
+              if (!el) return;
+              const fiberKey = Object.keys(el).find(k =>
+                k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance')
+              );
+              if (!fiberKey) return;
+              let fiber = el[fiberKey];
+              for (let depth = 0; depth < 15 && fiber; depth++) {
+                if (fiber.memoizedProps) {
+                  const props = fiber.memoizedProps;
+                  const candidates = [props.content, props.children, props.code, props.source, props.value];
+                  for (const val of candidates) {
+                    if (typeof val === 'string' && val.length > 10) {
+                      const trimmed = val.trim();
+                      if (MERMAID_KEYWORDS.test(trimmed)) {
+                        svg.setAttribute('data-mermaid-source', trimmed);
+                        count++;
+                        return;
+                      }
+                    }
+                  }
+                }
+                fiber = fiber.return;
+              }
+            } catch (e) { /* skip this SVG */ }
+          });
+
+          // Pass 2：處理孤兒錯誤 SVG
+          // Devin 的 mermaid 渲染器在渲染失敗時，會將錯誤 SVG 拋到 body 下方，
+          // 完全脫離 React 的 component tree（無 __reactFiber 屬性）。
+          // 策略：BFS 遍歷整個 React fiber tree，收集所有 mermaid 原始碼，
+          // 排除已在 Pass 1 中配對的，再按順序指派給孤兒 SVG。
+          const orphanSvgs = [];
+          allSvgs.forEach(svg => {
+            if (!svg.getAttribute('data-mermaid-source')) orphanSvgs.push(svg);
+          });
+
+          if (orphanSvgs.length > 0) {
+            // Collect all mermaid sources from React fiber tree
+            const allMermaidSources = [];
+            const contentArea = document.querySelector('[class*="wiki-content"]')
+              || document.querySelector('main')
+              || document.querySelector('[class*="markdown"]')
+              || document.querySelector('article')
+              || document.querySelector('#__next');
+
+            if (contentArea) {
+              // Walk the fiber tree from a React-managed element
+              const reactEl = contentArea.querySelector('[class]') || contentArea;
+              const fiberKey = Object.keys(reactEl).find(k =>
+                k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance')
+              );
+              if (fiberKey) {
+                // BFS/DFS through fiber tree to find all mermaid content props
+                const visited = new Set();
+                const queue = [reactEl[fiberKey]];
+                while (queue.length > 0 && allMermaidSources.length < 200) {
+                  const fiber = queue.shift();
+                  if (!fiber || visited.has(fiber)) continue;
+                  visited.add(fiber);
+                  if (visited.size > 5000) break; // safety limit
+                  if (fiber.memoizedProps) {
+                    for (const key of ['content', 'code', 'source', 'value']) {
+                      const val = fiber.memoizedProps[key];
+                      if (typeof val === 'string' && val.length > 10 && MERMAID_KEYWORDS.test(val.trim())) {
+                        allMermaidSources.push(val.trim());
+                      }
+                    }
+                  }
+                  if (fiber.child) queue.push(fiber.child);
+                  if (fiber.sibling) queue.push(fiber.sibling);
+                }
+              }
+            }
+
+            // Remove sources already assigned to SVGs (from pass 1)
+            const assignedSources = new Set();
+            allSvgs.forEach(svg => {
+              const src = svg.getAttribute('data-mermaid-source');
+              if (src) assignedSources.add(src);
+            });
+            const unmatched = allMermaidSources.filter(s => !assignedSources.has(s));
+
+            // Assign unmatched sources to orphan SVGs in order
+            for (let i = 0; i < orphanSvgs.length && i < unmatched.length; i++) {
+              orphanSvgs[i].setAttribute('data-mermaid-source', unmatched[i]);
+              count++;
+            }
+          }
+
+          // Pass 3：從 React fiber props 擷取程式碼區塊的語言資訊
+          // DeepWiki 和 Devin 的 <code> 元素通常沒有 language-xxx class，
+          // 但 React fiber 的 memoizedProps 中有 language/lang 屬性。
+          // 搜尋 code 元素和其父 pre 元素的 fiber，深度上限 8 層。
+          document.querySelectorAll('pre code').forEach(code => {
+            if (code.getAttribute('data-code-language')) return;
+            try {
+              const el = code.closest('pre') || code.parentElement;
+              if (!el) return;
+              // Check code element first, then pre element
+              for (const target of [code, el]) {
+                const fk = Object.keys(target).find(k =>
+                  k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance')
+                );
+                if (!fk) continue;
+                let f = target[fk];
+                for (let d = 0; d < 8 && f; d++) {
+                  if (f.memoizedProps) {
+                    const lang = f.memoizedProps.language || f.memoizedProps.lang;
+                    if (typeof lang === 'string' && lang.length > 0 && lang.length < 30) {
+                      code.setAttribute('data-code-language', lang);
+                      return;
+                    }
+                    // Check className for language-* pattern
+                    const cn = f.memoizedProps.className;
+                    if (typeof cn === 'string') {
+                      const m = cn.match(/language-(\S+)/);
+                      if (m) {
+                        code.setAttribute('data-code-language', m[1]);
+                        return;
+                      }
+                    }
+                  }
+                  f = f.return;
+                }
+              }
+            } catch (e) { /* skip */ }
+          });
+
+          return count;
+        } catch (e) {
+          return 0;
+        }
+      }
+    }).then(results => {
+      const count = results?.[0]?.result || 0;
+      sendResponse({ success: true, count });
+    }).catch(error => {
+      sendResponse({ success: false, error: error.message });
+    });
     return true;
   }
 

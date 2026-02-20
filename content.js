@@ -123,6 +123,18 @@
           let markdownTitle = title.replace(/\s+/g, '-');
 
           if (contentContainer) {
+            // 在轉換前，先透過 background.js 以 MAIN world 執行腳本，
+            // 從 React fiber 的 memoizedProps 中擷取 mermaid 原始碼與程式語言資訊，
+            // 並寫入 data-mermaid-source / data-code-language 屬性供後續讀取。
+            // 因為 content script 在隔離的世界中無法存取 __reactFiber$，
+            // 而 CSP 又阻擋了 inline <script>，所以必須透過 background 呼叫
+            // chrome.scripting.executeScript({ world: 'MAIN' }) 來繞過限制。
+            // 此邏輯同時適用於 DeepWiki (Next.js) 和 Devin (React)。
+            if (contentContainer.querySelector('svg[id^="mermaid-"]') ||
+                contentContainer.querySelector('pre code')) {
+              await injectMermaidSourceExtractor();
+            }
+
             contentContainer.childNodes.forEach((child) => {
               markdown += processNode(child);
             });
@@ -237,7 +249,7 @@
                   return true;
                 });
 
-                finalButtons.forEach(button => {
+                finalButtons.forEach((button, index) => {
                   const text = button.textContent.trim();
                   const rect = button.getBoundingClientRect();
 
@@ -245,7 +257,8 @@
                   counters.push({
                     element: button,
                     text: text,
-                    left: rect.left
+                    left: rect.left,
+                    buttonIndex: index  // 儲存按鈕索引，供批次下載時以點擊方式切換頁面
                   });
                 });
 
@@ -302,7 +315,8 @@
                       textContent: item.text,
                       href: fullUrl,
                       text: item.text,
-                      hierarchicalTitle: `${prefix} ${item.text}`
+                      hierarchicalTitle: `${prefix} ${item.text}`,
+                      buttonIndex: item.buttonIndex  // 傳遞按鈕索引供點擊式導覽使用
                     };
                   });
 
@@ -333,18 +347,18 @@
               url: new URL(link.getAttribute('href'), baseUrl).href,
               // Use hierarchical title (1.1 Title) if available, otherwise fallback to text content
               title: link.hierarchicalTitle || link.textContent.trim(),
-              selected: link.getAttribute('data-selected') === 'true'
+              selected: link.getAttribute('data-selected') === 'true',
+              buttonIndex: link.buttonIndex  // Devin 批次下載使用按鈕索引進行點擊式導覽
             };
           });
 
-          // Filter out pages that strictly don't belong to the current project path
-          // For Devin, we calculate a Wiki Base URL (project root) and should filter by that.
-          // For generic sites, we might stick to currentPathPrefix but it's risky for siblings.
+          // 頁面 URL 過濾邏輯：
+          // Devin 的側邊欄可能包含其他專案的連結，需要根據 wiki base URL 過濾。
+          // DeepWiki 的側邊欄選擇器 (.border-r-border ul li a) 本身已限定在正確的 repo 範圍內，
+          // 不需要額外過濾，否則會因為 filterPrefix 使用完整路徑而只匹配到當前頁面。
 
-          let filterPrefix = window.location.origin + window.location.pathname;
-
-          // If we are on Devin and detected a wiki base, use it
           if (hostname.includes('devin.ai')) {
+            let filterPrefix = window.location.origin + window.location.pathname;
             const pathParts = window.location.pathname.split('/');
             const wikiIndex = pathParts.indexOf('wiki');
             // Capture up to project name: /org/[org]/wiki/[user]/[project]
@@ -352,12 +366,11 @@
               const basePath = pathParts.slice(0, wikiIndex + 3).join('/');
               filterPrefix = window.location.origin + basePath;
             }
+            pages = pages.filter(page => page.url.startsWith(filterPrefix));
           }
 
-          pages = pages.filter(page => page.url.startsWith(filterPrefix));
-
           if (DEBUG_MODE) {
-            console.log(`Extracted ${pages.length} valid pages (Prefix: ${filterPrefix}):`, pages);
+            console.log(`Extracted ${pages.length} valid pages:`, pages);
           }
 
           // Get current page information for return
@@ -391,6 +404,7 @@
           sendResponse({
             success: true,
             pages: pages,
+            isDevinButtonNav: hostname.includes('devin.ai'),  // 告知 background.js 是否使用按鈕點擊式導覽
             currentTitle: currentPageTitle,
             baseUrl: baseUrl,
             headTitle: formattedHeadTitle,
@@ -412,11 +426,111 @@
       if (DEBUG_MODE) console.log("Tab activated:", window.location.href);
       // Acknowledge receipt of message to avoid connection errors
       sendResponse({ received: true });
+    } else if (request.action === "navigateDevinPage") {
+      // === Devin 批次下載的頁面切換 ===
+      // 問題：Devin 是 SPA，用 chrome.tabs.update({ url }) 切換頁面會導致
+      //       整個 app 重新導向到 wiki 首頁，無法正確載入目標頁面。
+      // 解法：改為直接點擊側邊欄按鈕來切換頁面，並輪詢等待內容區塊更新。
+      //       按鈕的篩選邏輯與 extractAllPages 完全相同，確保索引對應一致。
+      const { buttonIndex } = request;
+      if (DEBUG_MODE) console.log(`Devin: navigateDevinPage requested for buttonIndex=${buttonIndex}`);
+
+      try {
+        // Re-find sidebar buttons using same logic as extractAllPages
+        let sidebarContainer = document.querySelector('div[class*="w-[--sidebar-main-width]"]');
+        if (!sidebarContainer || sidebarContainer.querySelectorAll('button').length === 0) {
+          const potentialContainers = Array.from(document.querySelectorAll('div, aside, nav'));
+          sidebarContainer = potentialContainers.find(div => {
+            const rect = div.getBoundingClientRect();
+            if (rect.left > 100 || rect.width > 400 || rect.height < 300) return false;
+            const btns = div.querySelectorAll('button');
+            return btns.length >= 3;
+          }) || null;
+        }
+
+        if (!sidebarContainer) {
+          sendResponse({ success: false, error: 'Sidebar container not found' });
+          return;
+        }
+
+        const buttons = Array.from(sidebarContainer.querySelectorAll('button'));
+
+        // Extract Org Name for filtering (same logic as extractAllPages)
+        const pathParts = window.location.pathname.split('/');
+        const orgIndex = pathParts.indexOf('org');
+        let orgName = '';
+        if (orgIndex !== -1 && pathParts[orgIndex + 1]) {
+          orgName = pathParts[orgIndex + 1].replace(/-/g, ' ');
+        }
+
+        const navButtons = buttons.filter(btn => {
+          const text = btn.innerText.trim();
+          if (!text) return false;
+          if (['Add repo', 'New chat', 'Import repository', 'Create new'].some(exclude => text.includes(exclude))) return false;
+          if (['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Back'].includes(text)) return false;
+          return true;
+        });
+
+        const finalButtons = navButtons.filter(btn => {
+          const text = btn.innerText.trim();
+          if (orgName && text.toLowerCase().includes(orgName.toLowerCase())) return false;
+          return true;
+        });
+
+        if (buttonIndex < 0 || buttonIndex >= finalButtons.length) {
+          sendResponse({ success: false, error: `Button index ${buttonIndex} out of range (${finalButtons.length} buttons)` });
+          return;
+        }
+
+        const targetButton = finalButtons[buttonIndex];
+        if (DEBUG_MODE) console.log(`Devin: Clicking sidebar button "${targetButton.textContent.trim()}" at index ${buttonIndex}`);
+
+        // Get the current content to detect when it changes
+        const contentContainer =
+          document.querySelector('.prose-main') ||
+          document.querySelector('.prose') ||
+          document.querySelector('article') ||
+          document.querySelector('main');
+        const previousContent = contentContainer ? contentContainer.innerHTML : '';
+
+        // Click the button
+        targetButton.click();
+
+        // Wait for content to update (poll for change or timeout)
+        const POLL_INTERVAL = 200;
+        const MAX_WAIT = 10000;
+        let waited = 0;
+
+        const waitForContentChange = () => {
+          const currentContainer =
+            document.querySelector('.prose-main') ||
+            document.querySelector('.prose') ||
+            document.querySelector('article') ||
+            document.querySelector('main');
+          const currentContent = currentContainer ? currentContainer.innerHTML : '';
+
+          if (currentContent !== previousContent || waited >= MAX_WAIT) {
+            if (DEBUG_MODE) console.log(`Devin: Content updated after ${waited}ms`);
+            sendResponse({ success: true });
+            return;
+          }
+
+          waited += POLL_INTERVAL;
+          setTimeout(waitForContentChange, POLL_INTERVAL);
+        };
+
+        // Give a small initial delay for the click to register
+        setTimeout(waitForContentChange, POLL_INTERVAL);
+      } catch (error) {
+        console.error('Devin: navigateDevinPage error:', error);
+        sendResponse({ success: false, error: error.message });
+      }
+      // Fall through to return true below (async sendResponse via setTimeout)
     }
 
     // Only return true for asynchronous actions that will call sendResponse later.
     // Note: convertToMarkdown already returns true inside its own if-block (line 146).
-    if (request.action === "extractAllPages") {
+    if (request.action === "extractAllPages" || request.action === "navigateDevinPage") {
       return true;
     }
     // For synchronous actions (like pageLoaded, tabActivated), we already called sendResponse above
@@ -454,6 +568,284 @@
     return lines;
   }
 
+  // === Mermaid 圖表原始碼擷取 ===
+  // 背景：DeepWiki 和 Devin 都使用 Mermaid 渲染 SVG 圖表，但渲染後的 SVG DOM
+  // 中不再包含原始的 Mermaid 語法。原始碼存放在 React fiber tree 的 memoizedProps 中。
+  //
+  // 架構：
+  // 1. injectMermaidSourceExtractor() - 請求 background.js 在 MAIN world 執行擷取
+  // 2. background.js 的 extractMermaidSources handler 負責實際的 fiber 遍歷
+  //    - Pass 1: 從 SVG 父元素的 fiber 向上搜尋 mermaid 原始碼
+  //    - Pass 2: 處理「孤兒」錯誤 SVG（被 Devin 渲染器拋到 body 下方，脫離 React tree）
+  //    - Pass 3: 從 fiber props 擷取程式碼區塊的語言資訊
+  // 3. 擷取結果寫入 data-mermaid-source / data-code-language DOM 屬性
+  // 4. content.js 在轉換時讀取這些屬性（跨 world 共享 DOM）
+
+  // 請求 background.js 執行 MAIN world 擷取腳本
+  function injectMermaidSourceExtractor() {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ action: 'extractMermaidSources' }, (response) => {
+        if (chrome.runtime.lastError) {
+          if (DEBUG_MODE) console.warn('Mermaid: extractMermaidSources failed:', chrome.runtime.lastError.message);
+        } else if (DEBUG_MODE) {
+          console.log('Mermaid: extractMermaidSources response:', response);
+        }
+        resolve();
+      });
+    });
+  }
+
+  // 從 data-mermaid-source 屬性讀取 mermaid 原始碼（由 MAIN world 腳本寫入）
+  function extractMermaidSourceFromReact(svgElement) {
+    const source = svgElement.getAttribute('data-mermaid-source');
+    if (source && source.length > 10) {
+      if (DEBUG_MODE) console.log('Mermaid: Found source from React fiber (main world extraction)');
+      return source;
+    }
+    return null;
+  }
+
+  // 將 Mermaid SVG 元素轉換為 Mermaid 原始碼的 markdown 程式碼區塊
+  // 策略優先順序：
+  //   1. 從 data-mermaid-source 讀取（最佳品質，來自 React fiber）
+  //   2. 從 SVG DOM 結構反向重建（品質較差，但不依賴 React）
+  //   3. 擷取 SVG 中所有可見文字作為 fallback
+  function convertMermaidSvgToSource(svgElement) {
+    try {
+      const ariaRole = svgElement.getAttribute('aria-roledescription') || '';
+
+      // 錯誤圖表：Devin 的 mermaid 渲染器有時會產生 aria-roledescription="error" 的 SVG，
+      // 這些 SVG 通常已脫離 React tree，但仍嘗試從 data attribute 讀取原始碼
+      if (ariaRole === 'error') {
+        const reactSource = extractMermaidSourceFromReact(svgElement);
+        if (reactSource) {
+          return `\n\`\`\`mermaid\n${reactSource}\n\`\`\`\n`;
+        }
+        if (DEBUG_MODE) console.log('Mermaid: Skipping error diagram (source lost)');
+        return '\n\n> [Mermaid diagram - rendering failed on source page]\n\n';
+      }
+
+      // 策略 1：從 React fiber props 擷取原始碼（最佳品質）
+      const reactSource = extractMermaidSourceFromReact(svgElement);
+      if (reactSource) {
+        return `\n\`\`\`mermaid\n${reactSource}\n\`\`\`\n`;
+      }
+
+      // 策略 2：從 SVG DOM 結構反向重建 mermaid 語法
+      if (DEBUG_MODE) console.log('Mermaid: React source not found, falling back to SVG reconstruction');
+      const svgClass = svgElement.getAttribute('class') || '';
+
+      const isFlowchart = ariaRole.includes('flowchart') || svgClass.includes('flowchart');
+      const isSequence = ariaRole.includes('sequence') || svgClass.includes('sequence');
+      const isClassDiagram = svgClass.includes('classDiagram') || ariaRole.includes('classDiagram');
+
+      if (isFlowchart) {
+        return reconstructFlowchart(svgElement);
+      } else if (isSequence) {
+        return reconstructSequenceDiagram(svgElement);
+      } else if (isClassDiagram) {
+        return reconstructClassDiagram(svgElement);
+      }
+
+      // Fallback：擷取 SVG 中所有可見文字
+      return mermaidFallback(svgElement);
+    } catch (e) {
+      if (DEBUG_MODE) console.warn('Mermaid SVG reconstruction failed:', e);
+      return mermaidFallback(svgElement);
+    }
+  }
+
+  function mermaidFallback(svgElement) {
+    const texts = [];
+    svgElement.querySelectorAll('span.nodeLabel, span.edgeLabel, text').forEach(el => {
+      const t = el.textContent.trim();
+      if (t) texts.push(t);
+    });
+    if (texts.length > 0) {
+      return `\n\`\`\`\n[Mermaid diagram]\n${texts.join('\n')}\n\`\`\`\n`;
+    }
+    return '\n[Mermaid diagram - unable to reconstruct]\n';
+  }
+
+  // 跳脫 mermaid 標籤中的特殊字元：遇到 [](){}/<> 等字元時用雙引號包裹
+  function escapeMermaidLabel(label) {
+    if (/["\[\](){}/<>|\\#&;]/.test(label)) {
+      // Double-quote the label, escaping inner quotes
+      return '"' + label.replace(/"/g, '#quot;') + '"';
+    }
+    return label;
+  }
+
+  // === 流程圖 SVG → Mermaid 語法反向重建 ===
+  // 從 SVG DOM 結構中擷取節點（g.node）、邊線（g.edgePaths path）、
+  // 子圖（g.cluster）等資訊，重建為 flowchart 語法。
+  // 節點 ID 格式：flowchart-{Name}-{N}，邊線 ID 格式：L_{Source}_{Target}_{N}
+  function reconstructFlowchart(svgElement) {
+    // 從 viewBox 寬高比推斷方向：寬 > 高 × 1.3 → LR，否則 TD
+    const viewBox = svgElement.getAttribute('viewBox');
+    let direction = 'TD';
+    if (viewBox) {
+      const parts = viewBox.split(/\s+/).map(Number);
+      if (parts.length === 4) {
+        const width = parts[2], height = parts[3];
+        if (width > height * 1.3) direction = 'LR';
+      }
+    }
+
+    const lines = [`flowchart ${direction}`];
+
+    // Extract subgraphs with their DOM elements for containment checks
+    const subgraphs = [];
+    svgElement.querySelectorAll('g.cluster').forEach(cluster => {
+      const labelEl = cluster.querySelector('foreignObject span, text');
+      const label = labelEl ? labelEl.textContent.trim() : '';
+      if (label) {
+        subgraphs.push({ element: cluster, label });
+      }
+    });
+
+    // Extract all nodes: id pattern "flowchart-{Name}-{N}"
+    const allNodes = []; // { element, name, label }
+    svgElement.querySelectorAll('g.node').forEach(node => {
+      const nodeId = node.getAttribute('id') || '';
+      const labelEl = node.querySelector('span.nodeLabel');
+      const label = labelEl ? labelEl.textContent.trim() : '';
+
+      let name = nodeId;
+      const flowchartMatch = nodeId.match(/^flowchart-(.+)-\d+$/);
+      if (flowchartMatch) {
+        name = flowchartMatch[1];
+      }
+
+      if (name) {
+        allNodes.push({ element: node, name, label: label || name });
+      }
+    });
+
+    // Build a map of node name -> label for output
+    const nodeMap = new Map();
+    allNodes.forEach(n => nodeMap.set(n.name, n.label));
+
+    // Determine which nodes belong to which subgraph (by DOM containment)
+    const nodeToSubgraph = new Map(); // node name -> subgraph index
+    allNodes.forEach(n => {
+      for (let si = subgraphs.length - 1; si >= 0; si--) {
+        if (subgraphs[si].element.contains(n.element)) {
+          nodeToSubgraph.set(n.name, si);
+          break; // Use innermost (last matched, since we iterate reverse)
+        }
+      }
+    });
+
+    // Extract edges from path IDs: "L_Source_Target_N" or "L-Source-Target-N"
+    const edges = [];
+    svgElement.querySelectorAll('g.edgePaths path, g.edgePath path').forEach(path => {
+      const pathId = path.getAttribute('id') || '';
+      const edgeMatch = pathId.match(/^L[-_](.+?)[-_](.+?)[-_]\d+$/);
+      if (edgeMatch) {
+        edges.push({ source: edgeMatch[1], target: edgeMatch[2], label: '' });
+      }
+    });
+
+    // Extract edge labels by order (edgeLabels appear in same order as edges)
+    const edgeLabelTexts = [];
+    svgElement.querySelectorAll('g.edgeLabels > g').forEach(labelGroup => {
+      const labelEl = labelGroup.querySelector('span.edgeLabel');
+      const text = labelEl ? labelEl.textContent.trim() : '';
+      edgeLabelTexts.push(text);
+    });
+    // Match by order
+    edgeLabelTexts.forEach((text, i) => {
+      if (text && edges[i]) {
+        edges[i].label = text;
+      }
+    });
+
+    // Output subgraphs with their contained nodes
+    const nodesInSubgraphs = new Set();
+
+    subgraphs.forEach((sg, si) => {
+      lines.push(`  subgraph ${escapeMermaidLabel(sg.label)}`);
+      allNodes.forEach(n => {
+        if (nodeToSubgraph.get(n.name) === si) {
+          lines.push(`    ${n.name}[${escapeMermaidLabel(n.label)}]`);
+          nodesInSubgraphs.add(n.name);
+        }
+      });
+      lines.push('  end');
+    });
+
+    // Output top-level nodes (not in any subgraph)
+    allNodes.forEach(n => {
+      if (!nodesInSubgraphs.has(n.name)) {
+        lines.push(`  ${n.name}[${escapeMermaidLabel(n.label)}]`);
+      }
+    });
+
+    // Output edges
+    edges.forEach(edge => {
+      if (edge.label) {
+        lines.push(`  ${edge.source} -->|${escapeMermaidLabel(edge.label)}| ${edge.target}`);
+      } else {
+        lines.push(`  ${edge.source} --> ${edge.target}`);
+      }
+    });
+
+    if (lines.length <= 1) {
+      return mermaidFallback(svgElement);
+    }
+
+    return `\n\`\`\`mermaid\n${lines.join('\n')}\n\`\`\`\n`;
+  }
+
+  function reconstructSequenceDiagram(svgElement) {
+    const lines = ['sequenceDiagram'];
+
+    // Extract actors/participants from text elements in actor boxes
+    const actors = [];
+    svgElement.querySelectorAll('g.actor, text.actor').forEach(el => {
+      const text = el.textContent.trim();
+      if (text && !actors.includes(text)) {
+        actors.push(text);
+        lines.push(`  participant ${text}`);
+      }
+    });
+
+    // Extract messages from edge labels / message text
+    svgElement.querySelectorAll('text.messageText, g.messageText text').forEach(el => {
+      const text = el.textContent.trim();
+      if (text) {
+        // We can't perfectly reconstruct arrows, so use generic notation
+        lines.push(`  Note over ${actors[0] || 'A'}: ${text}`);
+      }
+    });
+
+    if (lines.length <= 1) {
+      return mermaidFallback(svgElement);
+    }
+
+    return `\n\`\`\`mermaid\n${lines.join('\n')}\n\`\`\`\n`;
+  }
+
+  function reconstructClassDiagram(svgElement) {
+    const lines = ['classDiagram'];
+
+    // Extract class names and members
+    svgElement.querySelectorAll('g.classGroup').forEach(group => {
+      const titleEl = group.querySelector('text.classTitle, tspan');
+      const className = titleEl ? titleEl.textContent.trim() : '';
+      if (className) {
+        lines.push(`  class ${className}`);
+      }
+    });
+
+    if (lines.length <= 1) {
+      return mermaidFallback(svgElement);
+    }
+
+    return `\n\`\`\`mermaid\n${lines.join('\n')}\n\`\`\`\n`;
+  }
+
   // Helper function to process a node and return Markdown
   function processNode(element) {
     let markdown = "";
@@ -484,6 +876,14 @@
       const prefix = "#".repeat(level) + " ";
       let content = "";
       element.childNodes.forEach((child) => {
+        // 過濾標題中的複製按鈕和 SVG 圖示
+        // Devin 會在標題元素內部插入「Copied!」按鈕和剪貼簿 SVG 圖示，
+        // 如果不過濾，輸出的 markdown 標題會附帶 "Copied!" 文字。
+        if (child.nodeType === Node.ELEMENT_NODE) {
+          const childTag = child.tagName.toLowerCase();
+          if (childTag === 'button' || childTag === 'svg') return;
+          if (child.getAttribute && child.getAttribute('aria-label')?.toLowerCase().includes('copy')) return;
+        }
         content += processNode(child);
       });
       return `\n${prefix}${content.trim()}\n`;
@@ -522,17 +922,82 @@
       return `\n${content}\n`;
     }
 
+    // === 表格轉換為 Markdown 表格 ===
+    // 遞迴處理儲存格內容以保留行內格式（粗體、斜體、程式碼等），
+    // 並跳脫管線符號 | 以避免破壞表格結構。
+    if (tagName === "table") {
+      const rows = element.querySelectorAll("tr");
+      if (rows.length === 0) return "";
+
+      const tableData = [];
+      rows.forEach(row => {
+        const cells = row.querySelectorAll("th, td");
+        const rowData = [];
+        cells.forEach(cell => {
+          // Process cell content recursively to handle inline formatting
+          let cellText = "";
+          cell.childNodes.forEach(child => {
+            cellText += processNode(child);
+          });
+          // Clean up: collapse whitespace, trim, escape pipes
+          cellText = cellText.trim().replace(/\n/g, " ").replace(/\s+/g, " ").replace(/\|/g, "\\|");
+          rowData.push(cellText);
+        });
+        tableData.push(rowData);
+      });
+
+      if (tableData.length === 0) return "";
+
+      // Determine column count from the widest row
+      const colCount = Math.max(...tableData.map(r => r.length));
+
+      // Build markdown table
+      let md = "\n";
+      // Header row
+      const header = tableData[0];
+      md += "| " + header.map((c, i) => c || "").concat(Array(Math.max(0, colCount - header.length)).fill("")).join(" | ") + " |\n";
+      // Separator
+      md += "| " + Array(colCount).fill("---").join(" | ") + " |\n";
+      // Data rows
+      for (let i = 1; i < tableData.length; i++) {
+        const row = tableData[i];
+        md += "| " + row.map((c, j) => c || "").concat(Array(Math.max(0, colCount - row.length)).fill("")).join(" | ") + " |\n";
+      }
+      return md + "\n";
+    }
+
+    // 若直接遇到表格子元素（不經由 <table> 進入），仍遞迴處理其子節點
+    if (["thead", "tbody", "tfoot", "tr", "th", "td"].includes(tagName)) {
+      let content = "";
+      element.childNodes.forEach(child => {
+        content += processNode(child);
+      });
+      return content;
+    }
+
     // Code Blocks (Pre/Code)
     if (tagName === "pre") {
+      // DeepWiki 會將 mermaid SVG 包裹在 <pre> 元素中（DOM 結構：pre > div > svg），
+      // 如果不在此處攔截，<pre> handler 會把 SVG 內的文字當作程式碼輸出。
+      const mermaidSvg = element.querySelector('svg[id^="mermaid-"]');
+      if (mermaidSvg) {
+        return convertMermaidSvgToSource(mermaidSvg);
+      }
+
       const codeElement = element.querySelector("code");
       let codeText = "";
       let language = "";
 
       if (codeElement) {
         codeText = codeElement.innerText; // Use innerText to preserve formatting
-        // Try to get language class
+        // 程式語言偵測：優先從 CSS class (language-xxx) 取得，
+        // 若無則從 data-code-language 屬性取得（由 MAIN world 腳本從 React fiber 擷取）
         const displayClass = Array.from(codeElement.classList).find(c => c.startsWith('language-'));
-        if (displayClass) language = displayClass.replace('language-', '');
+        if (displayClass) {
+          language = displayClass.replace('language-', '');
+        } else {
+          language = codeElement.getAttribute('data-code-language') || '';
+        }
       } else {
         codeText = element.innerText;
       }
@@ -594,6 +1059,23 @@
     // Horizontal Rule
     if (tagName === "hr") {
       return "\n---\n";
+    }
+
+    // === SVG 元素處理 ===
+    // 偵測 Mermaid 圖表（id 以 mermaid- 開頭，或具有 flowchart/sequence 等 class/role），
+    // 呼叫 convertMermaidSvgToSource 轉換為 mermaid 程式碼區塊。
+    // 非 mermaid 的 SVG（圖示等）直接忽略，避免輸出無意義內容。
+    if (tagName === 'svg') {
+      const svgId = element.getAttribute('id') || '';
+      const svgClass = element.getAttribute('class') || '';
+      const ariaRole = element.getAttribute('aria-roledescription') || '';
+
+      if (svgId.startsWith('mermaid-') ||
+          ['flowchart', 'classDiagram', 'sequence'].some(t => svgClass.includes(t) || ariaRole.includes(t))) {
+        return convertMermaidSvgToSource(element);
+      }
+      // Skip non-mermaid SVGs (icons, etc.)
+      return '';
     }
 
     // Divs and Spans (Generic containers)
