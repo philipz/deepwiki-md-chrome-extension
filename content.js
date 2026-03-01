@@ -174,43 +174,62 @@
             // 1. Find the sidebar container
             let sidebarContainer = document.querySelector('div[class*="w-[--sidebar-main-width]"]');
 
-            // Fallback for sidebar detection if the class changes
-            if (!sidebarContainer || sidebarContainer.querySelectorAll('button').length === 0) {
-              // Try to find any vertical list of buttons on the left side
-              const potentialContainers = Array.from(document.querySelectorAll('div, aside, nav'));
-              const validContainer = potentialContainers.find(div => {
-                const rect = div.getBoundingClientRect();
-                // Check if it's on the left side and has decent height
-                if (rect.left > 100 || rect.width > 400 || rect.height < 300) return false;
+            let items = [];
+            let isNewDevinStructure = false;
 
-                // Must contain multiple buttons
-                const btns = div.querySelectorAll('button');
-                if (btns.length < 3) return false;
+            // Try New Devin Structure (March 2026+) first
+            const menuButtons = Array.from(document.querySelectorAll('div[data-slot="sidebar-menu-button"]'));
+            if (menuButtons.length > 0) {
+              isNewDevinStructure = true;
+              items = menuButtons;
+              if (DEBUG_MODE) console.log('Devin: Found sidebar via data-slot="sidebar-menu-button" heuristic');
+            } else {
+              // Fallback for sidebar detection if the class changes
+              if (!sidebarContainer || sidebarContainer.querySelectorAll('button').length === 0) {
+                // Try to find any vertical list of buttons on the left side
+                const potentialContainers = Array.from(document.querySelectorAll('div, aside, nav'));
+                const validContainer = potentialContainers.find(div => {
+                  const rect = div.getBoundingClientRect();
+                  // Check if it's on the left side and has decent height
+                  if (rect.left > 100 || rect.width > 400 || rect.height < 300) return false;
 
-                // Check if buttons look like nav items (text-align left, etc - heuristic)
-                return true;
-              });
+                  // Must contain multiple buttons
+                  const btns = div.querySelectorAll('button');
+                  if (btns.length < 3) return false;
 
-              if (validContainer) {
-                sidebarContainer = validContainer;
-                if (DEBUG_MODE) console.log('Devin: Found sidebar via generic left-column heuristic', sidebarContainer);
+                  // Check if buttons look like nav items (text-align left, etc - heuristic)
+                  return true;
+                });
+
+                if (validContainer) {
+                  sidebarContainer = validContainer;
+                  if (DEBUG_MODE) console.log('Devin: Found sidebar via generic left-column heuristic', sidebarContainer);
+                }
+              }
+              if (sidebarContainer) {
+                items = Array.from(sidebarContainer.querySelectorAll('button'));
               }
             }
 
-            if (sidebarContainer) {
-              // Refined Selector: Only target BUTTONS. 
-              // Previous logic might have been too broad if it included 'a' tags disguised as buttons, 
-              // but querySelectorAll('button') should strict.
-              // We adding data-slot check if possible, but class check is fragile.
-              // The browser inspection showed wiki pages are <button> and others are <a>.
-              const buttons = Array.from(sidebarContainer.querySelectorAll('button'));
-
-              if (buttons.length > 0) {
+            // We use `isNewDevinStructure || sidebarContainer` to replace the old `if (sidebarContainer)` check cleanly.
+            if (isNewDevinStructure || sidebarContainer) {
+              if (items.length > 0) {
                 let counters = [];
 
-                // Filter buttons that are likely nav items
-                const navButtons = buttons.filter(btn => {
-                  const text = btn.innerText.trim();
+                // Filter items that are likely nav items
+                const navButtons = items.filter(item => {
+                  let text = '';
+                  if (isNewDevinStructure) {
+                    const btn = item.querySelector('button');
+                    text = btn ? (btn.getAttribute('aria-label') || btn.innerText.trim()) : '';
+                    if (!text) {
+                      const span = item.querySelector('span.truncate');
+                      if (span) text = span.textContent.trim();
+                    }
+                  } else {
+                    text = item.innerText.trim();
+                  }
+
                   // Exclude common non-wiki buttons found in sidebar
                   if (!text) return false;
                   if (['Add repo', 'New chat', 'Import repository', 'Create new'].some(exclude => text.includes(exclude))) return false;
@@ -231,19 +250,41 @@
                 }
 
                 // Second pass filter for Org Name / Workspace selector
-                const finalButtons = navButtons.filter(btn => {
-                  const text = btn.innerText.trim();
+                const finalButtons = navButtons.filter(item => {
+                  let text = '';
+                  if (isNewDevinStructure) {
+                    const btn = item.querySelector('button');
+                    text = btn ? (btn.getAttribute('aria-label') || btn.innerText.trim()) : '';
+                    if (!text) {
+                      const span = item.querySelector('span.truncate');
+                      if (span) text = span.textContent.trim();
+                    }
+                  } else {
+                    text = item.innerText.trim();
+                  }
+
                   if (orgName && text.toLowerCase().includes(orgName.toLowerCase())) return false;
                   return true;
                 });
 
-                finalButtons.forEach(button => {
-                  const text = button.textContent.trim();
-                  const rect = button.getBoundingClientRect();
+                finalButtons.forEach(item => {
+                  let text = '';
+                  if (isNewDevinStructure) {
+                    const btn = item.querySelector('button');
+                    text = btn ? (btn.getAttribute('aria-label') || btn.innerText.trim()) : '';
+                    if (!text) {
+                      const span = item.querySelector('span.truncate');
+                      if (span) text = span.textContent.trim();
+                    }
+                  } else {
+                    text = item.textContent.trim();
+                  }
+
+                  const rect = item.getBoundingClientRect();
 
                   // Store raw data for processing
                   counters.push({
-                    element: button,
+                    element: item,
                     text: text,
                     left: rect.left
                   });
