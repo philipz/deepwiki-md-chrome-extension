@@ -165,160 +165,214 @@
           let sidebarLinks = [];
 
           if (hostname.includes('devin.ai')) {
+            const pathParts = window.location.pathname.split('/');
             // Devin AI sidebar logic
             if (DEBUG_MODE) console.log('Devin: Detecting sidebar links...');
 
             // Strategy: Devin 2.0 uses buttons for sidebar items, not just UL/LI.
             // We need to capture these buttons and generate hash links for them.
 
+            let items = [];
+            let isNewDevinStructure = false;
+
             // 1. Find the sidebar container
             let sidebarContainer = document.querySelector('div[class*="w-[--sidebar-main-width]"]');
 
+            let existingMenuButtons = sidebarContainer ? Array.from(sidebarContainer.querySelectorAll('div[data-slot="sidebar-menu-button"]')) : [];
+
             // Fallback for sidebar detection if the class changes
-            if (!sidebarContainer || sidebarContainer.querySelectorAll('button').length === 0) {
-              // Try to find any vertical list of buttons on the left side
-              const potentialContainers = Array.from(document.querySelectorAll('div, aside, nav'));
-              const validContainer = potentialContainers.find(div => {
-                const rect = div.getBoundingClientRect();
-                // Check if it's on the left side and has decent height
-                if (rect.left > 100 || rect.width > 400 || rect.height < 300) return false;
+            if (!sidebarContainer || (sidebarContainer.querySelectorAll('button').length === 0 && existingMenuButtons.length === 0)) {
+              // Try New Devin UI structure (e.g., v2) first by looking at the whole document
+              const menuButtons = Array.from(document.querySelectorAll('div[data-slot="sidebar-menu-button"]'));
+              if (menuButtons.length > 0) {
+                // Use the hierarchy of the first button to find its scrollable parent list wrapper
+                let parent = menuButtons[0].parentElement;
+                let foundSpecificContainer = false;
+                // Go up a few levels to find a good container
+                for (let i = 0; i < 4 && parent; i++) {
+                  if (parent.querySelectorAll('div[data-slot="sidebar-menu-button"]').length > 3) {
+                    foundSpecificContainer = true;
+                    break;
+                  }
+                  parent = parent.parentElement;
+                }
+                sidebarContainer = foundSpecificContainer ? parent : menuButtons[0].parentElement;
+                existingMenuButtons = Array.from(sidebarContainer.querySelectorAll('div[data-slot="sidebar-menu-button"]'));
+              } else {
+                // Try to find any vertical list of buttons on the left side
+                const potentialContainers = Array.from(document.querySelectorAll('div, aside, nav'));
+                const validContainer = potentialContainers.find(div => {
+                  const rect = div.getBoundingClientRect();
+                  // Check if it's on the left side and has decent height
+                  if (rect.left > 100 || rect.width > 400 || rect.height < 300) return false;
 
-                // Must contain multiple buttons
-                const btns = div.querySelectorAll('button');
-                if (btns.length < 3) return false;
+                  // Must contain multiple buttons
+                  const btns = div.querySelectorAll('button');
+                  if (btns.length < 3) return false;
 
-                // Check if buttons look like nav items (text-align left, etc - heuristic)
-                return true;
-              });
+                  // Check if buttons look like nav items (text-align left, etc - heuristic)
+                  return true;
+                });
 
-              if (validContainer) {
-                sidebarContainer = validContainer;
-                if (DEBUG_MODE) console.log('Devin: Found sidebar via generic left-column heuristic', sidebarContainer);
+                if (validContainer) {
+                  sidebarContainer = validContainer;
+                  if (DEBUG_MODE) console.log('Devin: Found sidebar via generic left-column heuristic', sidebarContainer);
+                }
               }
             }
 
+            // We use `sidebarContainer` to scope our queries to prevent grabbing global buttons.
             if (sidebarContainer) {
-              // Refined Selector: Only target BUTTONS. 
-              // Previous logic might have been too broad if it included 'a' tags disguised as buttons, 
-              // but querySelectorAll('button') should strict.
-              // We adding data-slot check if possible, but class check is fragile.
-              // The browser inspection showed wiki pages are <button> and others are <a>.
-              const buttons = Array.from(sidebarContainer.querySelectorAll('button'));
-
-              if (buttons.length > 0) {
-                let counters = [];
-
-                // Filter buttons that are likely nav items
-                const navButtons = buttons.filter(btn => {
-                  const text = btn.innerText.trim();
-                  // Exclude common non-wiki buttons found in sidebar
-                  if (!text) return false;
-                  if (['Add repo', 'New chat', 'Import repository', 'Create new'].some(exclude => text.includes(exclude))) return false;
-
-                  // Ensure it's not a global nav item that somehow got implemented as a button
-                  // (Though inspection showed they are <a> tags, safety first)
-                  if (['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Back'].includes(text)) return false;
-
-                  return true;
-                });
-
-                // Extract Org Name from URL for exclusion (e.g. /org/philip-zheng/ -> Philip Zheng)
-                const pathParts = window.location.pathname.split('/');
-                const orgIndex = pathParts.indexOf('org');
-                let orgName = '';
-                if (orgIndex !== -1 && pathParts[orgIndex + 1]) {
-                  orgName = pathParts[orgIndex + 1].replace(/-/g, ' '); // philip-zheng -> philip zheng
-                }
-
-                // Second pass filter for Org Name / Workspace selector
-                const finalButtons = navButtons.filter(btn => {
-                  const text = btn.innerText.trim();
-                  if (orgName && text.toLowerCase().includes(orgName.toLowerCase())) return false;
-                  return true;
-                });
-
-                finalButtons.forEach(button => {
-                  const text = button.textContent.trim();
-                  const rect = button.getBoundingClientRect();
-
-                  // Store raw data for processing
-                  counters.push({
-                    element: button,
-                    text: text,
-                    left: rect.left
-                  });
-                });
-
-                // Calculate indentation baseline
-                if (counters.length > 0) {
-                  const minLeft = Math.min(...counters.map(c => c.left));
-                  const INDENT_THRESHOLD = 8;
-
-                  // Support Level 2 pages (Hierarchy) by removing the strict filter
-                  // and calculating prefixes (1, 1.1, 1.2, 2...)
-                  let hierarchyStack = [0];
-
-                  // Determine Base URL for Wiki
-                  const pathParts = window.location.pathname.split('/');
-                  const wikiIndex = pathParts.indexOf('wiki');
-                  let wikiBaseUrl = window.location.origin;
-
-                  if (wikiIndex !== -1 && pathParts[wikiIndex + 2]) {
-                    // Path structure: /org/[org]/wiki/[user]/[project]
-                    // wikiIndex points to 'wiki'. 
-                    // +1 is [user], +2 is [project].
-                    // We need to capture up to [project].
-                    // slice is exclusive, so +3.
-                    const basePath = pathParts.slice(0, wikiIndex + 3).join('/');
-                    wikiBaseUrl += basePath;
-                  }
-
-                  sidebarLinks = counters.map((item) => {
-                    // Determine Level based on indentation
-                    const offset = item.left - minLeft;
-                    const level = offset < INDENT_THRESHOLD ? 0 : 1;
-
-                    // Update Hierarchy Stack
-                    if (level > hierarchyStack.length - 1) {
-                      hierarchyStack.push(1);
-                    } else if (level < hierarchyStack.length - 1) {
-                      while (hierarchyStack.length - 1 > level) {
-                        hierarchyStack.pop();
-                      }
-                      hierarchyStack[level]++;
-                    } else {
-                      hierarchyStack[level]++;
-                    }
-
-                    const prefix = hierarchyStack.join('.');
-
-                    // Use Hash-based navigation as this seems to be the pattern for sub-sections
-                    // e.g. .../project#1.1
-                    // This avoids full page reloads and 404s on synthesized paths.
-                    const fullUrl = `${wikiBaseUrl}#${prefix}`;
-
-                    return {
-                      getAttribute: (attr) => (attr === 'href' ? fullUrl : null),
-                      textContent: item.text,
-                      href: fullUrl,
-                      text: item.text,
-                      hierarchicalTitle: `${prefix} ${item.text}`
-                    };
-                  });
-
-                  if (DEBUG_MODE) {
-                    console.log(`DeepWiki: Found ${sidebarLinks.length} total pages (Level 1 & 2).`);
-                  }
-                }
+              if (existingMenuButtons.length > 0) {
+                isNewDevinStructure = true;
+                items = existingMenuButtons;
+                if (DEBUG_MODE) console.log('Devin: Found sidebar via data-slot="sidebar-menu-button" heuristic within container');
+              } else {
+                items = Array.from(sidebarContainer.querySelectorAll('button'));
               }
             } else {
               if (DEBUG_MODE) console.log("Devin: No sidebar container found.");
             }
 
+            if (items.length > 0) {
+              let counters = [];
+
+              // Helper function to extract text consistently across old/new structures and filters
+              const getItemText = (item, isNewStructure) => {
+                if (isNewStructure) {
+                  const btn = item.querySelector('button');
+                  const span = item.querySelector('span.truncate');
+
+                  // Prioritize visible text in the DOM to avoid accessibility verbosity (e.g. "Navigate to...")
+                  let text = span ? span.textContent.trim() : '';
+
+                  if (!text && btn) {
+                    text = btn.innerText.trim();
+                  }
+
+                  // Only fall back to aria-label if all visible text fails
+                  if (!text && btn) {
+                    text = btn.getAttribute('aria-label') || '';
+                  }
+
+                  return text;
+                }
+                // Always use innerText for consistency, to avoid pulling visually hidden text
+                return item.innerText.trim();
+              };
+
+              // Pre-calculate text for all items to avoid redundant DOM queries during filtering
+              const itemsWithText = items.map(item => ({
+                element: item,
+                text: getItemText(item, isNewDevinStructure)
+              }));
+
+              // Filter items that are likely nav items
+              const navButtons = itemsWithText.filter(itemObj => {
+                const text = itemObj.text;
+
+                // Exclude common non-wiki buttons found in sidebar
+                if (!text) return false;
+                if (['Add repo', 'New chat', 'Import repository', 'Create new'].some(exclude => text.includes(exclude))) return false;
+
+                // Ensure it's not a global nav item that somehow got implemented as a button
+                // (Though inspection showed they are <a> tags, safety first)
+                if (['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Back'].includes(text)) return false;
+
+                return true;
+              });
+
+              // Extract Org Name from URL for exclusion (e.g. /org/philip-zheng/ -> Philip Zheng)
+              const orgIndex = pathParts.indexOf('org');
+              let orgName = '';
+              if (orgIndex !== -1 && pathParts[orgIndex + 1]) {
+                orgName = pathParts[orgIndex + 1].replace(/-/g, ' '); // philip-zheng -> philip zheng
+              }
+
+              // Second pass filter for Org Name / Workspace selector
+              const finalButtons = navButtons.filter(itemObj => {
+                const text = itemObj.text;
+                if (orgName && text.toLowerCase().includes(orgName.toLowerCase())) return false;
+                return true;
+              });
+
+              finalButtons.forEach(itemObj => {
+                const text = itemObj.text;
+                const rect = itemObj.element.getBoundingClientRect();
+
+                // Store raw data for processing
+                counters.push({
+                  element: itemObj.element,
+                  text: text,
+                  left: rect.left
+                });
+              });
+
+              // Calculate indentation baseline
+              if (counters.length > 0) {
+                const minLeft = Math.min(...counters.map(c => c.left));
+                const INDENT_THRESHOLD = 8;
+
+                // Support Level 2 pages (Hierarchy) by removing the strict filter
+                // and calculating prefixes (1, 1.1, 1.2, 2...)
+                let hierarchyStack = [0];
+
+                // Determine Base URL for Wiki
+                const wikiIndex = pathParts.indexOf('wiki');
+                let wikiBaseUrl = window.location.origin;
+
+                if (wikiIndex !== -1 && pathParts[wikiIndex + 2]) {
+                  // Path structure: /org/[org]/wiki/[user]/[project]
+                  // wikiIndex points to 'wiki'. 
+                  // +1 is [user], +2 is [project].
+                  // We need to capture up to [project].
+                  // slice is exclusive, so +3.
+                  const basePath = pathParts.slice(0, wikiIndex + 3).join('/');
+                  wikiBaseUrl += basePath;
+                }
+
+                sidebarLinks = counters.map((item) => {
+                  // Determine Level based on indentation
+                  const offset = item.left - minLeft;
+                  const level = offset < INDENT_THRESHOLD ? 0 : 1;
+
+                  // Update Hierarchy Stack
+                  if (level > hierarchyStack.length - 1) {
+                    hierarchyStack.push(1);
+                  } else if (level < hierarchyStack.length - 1) {
+                    while (hierarchyStack.length - 1 > level) {
+                      hierarchyStack.pop();
+                    }
+                    hierarchyStack[level]++;
+                  } else {
+                    hierarchyStack[level]++;
+                  }
+
+                  const prefix = hierarchyStack.join('.');
+
+                  // Use Hash-based navigation as this seems to be the pattern for sub-sections
+                  // e.g. .../project#1.1
+                  // This avoids full page reloads and 404s on synthesized paths.
+                  const fullUrl = `${wikiBaseUrl}#${prefix}`;
+
+                  return {
+                    getAttribute: (attr) => (attr === 'href' ? fullUrl : null),
+                    textContent: item.text,
+                    href: fullUrl,
+                    text: item.text,
+                    hierarchicalTitle: `${prefix} ${item.text}`
+                  };
+                });
+
+                if (DEBUG_MODE) {
+                  console.log(`DeepWiki: Found ${sidebarLinks.length} total pages (Level 1 & 2).`);
+                }
+              }
+            }
+
             if (DEBUG_MODE) console.log(`Devin: Synthesized links found: ${sidebarLinks.length}`);
 
           } else {
-            // DeepWiki logic (original)
             sidebarLinks = Array.from(document.querySelectorAll('.border-r-border ul li a'));
           }
 
