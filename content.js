@@ -261,9 +261,15 @@
                 return item.innerText.trim();
               };
 
+              // Pre-calculate text for all items to avoid redundant DOM queries during filtering
+              const itemsWithText = items.map(item => ({
+                element: item,
+                text: getItemText(item, isNewDevinStructure)
+              }));
+
               // Filter items that are likely nav items
-              const navButtons = items.filter(item => {
-                const text = getItemText(item, isNewDevinStructure);
+              const navButtons = itemsWithText.filter(itemObj => {
+                const text = itemObj.text;
 
                 // Exclude common non-wiki buttons found in sidebar
                 if (!text) return false;
@@ -284,19 +290,19 @@
               }
 
               // Second pass filter for Org Name / Workspace selector
-              const finalButtons = navButtons.filter(item => {
-                const text = getItemText(item, isNewDevinStructure);
+              const finalButtons = navButtons.filter(itemObj => {
+                const text = itemObj.text;
                 if (orgName && text.toLowerCase().includes(orgName.toLowerCase())) return false;
                 return true;
               });
 
-              finalButtons.forEach(item => {
-                const text = getItemText(item, isNewDevinStructure);
-                const rect = item.getBoundingClientRect();
+              finalButtons.forEach(itemObj => {
+                const text = itemObj.text;
+                const rect = itemObj.element.getBoundingClientRect();
 
                 // Store raw data for processing
                 counters.push({
-                  element: item,
+                  element: itemObj.element,
                   text: text,
                   left: rect.left
                 });
