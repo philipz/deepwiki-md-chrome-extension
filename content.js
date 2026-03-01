@@ -178,8 +178,10 @@
             // 1. Find the sidebar container
             let sidebarContainer = document.querySelector('div[class*="w-[--sidebar-main-width]"]');
 
+            let existingMenuButtons = sidebarContainer ? Array.from(sidebarContainer.querySelectorAll('div[data-slot="sidebar-menu-button"]')) : [];
+
             // Fallback for sidebar detection if the class changes
-            if (!sidebarContainer || (sidebarContainer.querySelectorAll('button').length === 0 && sidebarContainer.querySelectorAll('div[data-slot="sidebar-menu-button"]').length === 0)) {
+            if (!sidebarContainer || (sidebarContainer.querySelectorAll('button').length === 0 && existingMenuButtons.length === 0)) {
               // Try New Devin UI structure (e.g., v2) first by looking at the whole document
               const menuButtons = Array.from(document.querySelectorAll('div[data-slot="sidebar-menu-button"]'));
               if (menuButtons.length > 0) {
@@ -195,6 +197,7 @@
                   parent = parent.parentElement;
                 }
                 sidebarContainer = foundSpecificContainer ? parent : menuButtons[0].parentElement;
+                existingMenuButtons = Array.from(sidebarContainer.querySelectorAll('div[data-slot="sidebar-menu-button"]'));
               } else {
                 // Try to find any vertical list of buttons on the left side
                 const potentialContainers = Array.from(document.querySelectorAll('div, aside, nav'));
@@ -220,10 +223,9 @@
 
             // We use `sidebarContainer` to scope our queries to prevent grabbing global buttons.
             if (sidebarContainer) {
-              const newStructureItems = Array.from(sidebarContainer.querySelectorAll('div[data-slot="sidebar-menu-button"]'));
-              if (newStructureItems.length > 0) {
+              if (existingMenuButtons.length > 0) {
                 isNewDevinStructure = true;
-                items = newStructureItems;
+                items = existingMenuButtons;
                 if (DEBUG_MODE) console.log('Devin: Found sidebar via data-slot="sidebar-menu-button" heuristic within container');
               } else {
                 items = Array.from(sidebarContainer.querySelectorAll('button'));
