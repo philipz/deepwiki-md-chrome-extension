@@ -493,7 +493,7 @@
 
     // Ignore elements hidden via Tailwind classes
     const classList = Array.from(element.classList || []);
-    if (classList.some(cls => ["sr-only", "opacity-0", "invisible", "hidden"].includes(cls))) {
+    if (classList.some(cls => ["sr-only", "invisible", "hidden"].includes(cls))) {
       return "";
     }
 
