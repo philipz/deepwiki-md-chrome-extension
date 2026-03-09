@@ -401,7 +401,7 @@
 
     // Security & Noise filters: Block potential destructive actions or generic UI elements
     const exactIgnoredLabels = ['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Back', 'Copy', 'Pin', 'Unpin', 'Delete', 'Remove', 'Archive', 'Reset', 'Clear', 'Sign out'];
-    const partialIgnoredLabels = ['Close sidebar', 'Show more breadcrumbs', 'Add repo', 'New chat', 'Import repository', 'Create new', 'Copy code', 'Link copied!', 'Delete', 'Remove'];
+    const partialIgnoredLabels = ['Close sidebar', 'Show more breadcrumbs', 'Add repo', 'New chat', 'Import repository', 'Create new', 'Copy code', 'Link copied!'];
 
     return buttons.filter(btn => {
       // 1. Layout checks: Must not be inside main content and must be on the left half of the screen
