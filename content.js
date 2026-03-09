@@ -362,9 +362,14 @@
 
         buttonToClick.click();
 
+        // Clear any existing orphaned interval
+        if (window._devinCheckInterval) {
+          clearInterval(window._devinCheckInterval);
+        }
+
         // Polling to detect when SPA has finished rendering the new page
         let attempts = 0;
-        const checkInterval = setInterval(() => {
+        window._devinCheckInterval = setInterval(() => {
           attempts++;
           if (!urlChanged && window.location.href !== oldUrl) {
             urlChanged = true;
@@ -393,7 +398,8 @@
           }
 
           if (readinessConfirmed || attempts > 50) {
-            clearInterval(checkInterval);
+            clearInterval(window._devinCheckInterval);
+            window._devinCheckInterval = null;
             if (DEBUG_MODE) console.log(`Devin: Content ready for '${targetText}'. URL changed: ${urlChanged}. Attempts: ${attempts}`);
 
             // Add a small breather for final react renders
