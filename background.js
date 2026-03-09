@@ -386,6 +386,8 @@ async function processSinglePage(page) {
     if (!clickRes || !clickRes.success) {
       throw new Error(clickRes?.error || `Failed to click Devin page button for: ${page.title}`);
     }
+    // Set pending state to queue subsequent messages until the SPA view is ready
+    markTabPending(batchState.tabId);
   } else {
     await navigateToPage(batchState.tabId, page.url);
   }

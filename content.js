@@ -166,42 +166,9 @@
 
           if (hostname.includes('devin.ai')) {
             const pathParts = window.location.pathname.split('/');
-            if (DEBUG_MODE) console.log('Devin: Detecting sidebar links using button[aria-label] logic...');
+            if (DEBUG_MODE) console.log('Devin: Detecting sidebar links using helper logic...');
 
-            const mainContent = document.querySelector('.prose-main') ||
-              document.querySelector('.prose') ||
-              document.querySelector('article') ||
-              document.querySelector('main');
-
-            const buttons = Array.from(document.querySelectorAll('button[aria-label]')).filter(btn => {
-              if (mainContent && mainContent.contains(btn)) return false;
-              const rect = btn.getBoundingClientRect();
-              if (rect.left > window.innerWidth / 2) return false;
-              return true;
-            });
-
-            // Extract Org Name from URL for exclusion (e.g. /org/philip-zheng/ -> Philip Zheng)
-            const orgIndex = pathParts.indexOf('org');
-            let orgName = '';
-            if (orgIndex !== -1 && pathParts[orgIndex + 1]) {
-              orgName = pathParts[orgIndex + 1].replace(/-/g, ' ').toLowerCase();
-            }
-
-            const exactIgnoredLabels = ['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Back', 'Copy', 'Pin', 'Unpin'];
-            const partialIgnoredLabels = ['Close sidebar', 'Show more breadcrumbs', 'Add repo', 'New chat', 'Import repository', 'Create new', 'Copy code', 'Link copied!'];
-
-            const navButtons = buttons.filter(btn => {
-              const label = btn.getAttribute('aria-label');
-              if (!label) return false;
-
-              const text = label.trim();
-
-              if (exactIgnoredLabels.includes(text)) return false;
-              if (partialIgnoredLabels.some(ignored => text.includes(ignored))) return false;
-              if (orgName && text.toLowerCase().includes(orgName)) return false;
-
-              return true;
-            });
+            const navButtons = getDevinSidebarButtons();
 
             if (navButtons.length > 0) {
               const counters = navButtons.map(btn => {
@@ -359,18 +326,45 @@
       sendResponse({ received: true });
     } else if (request.action === "clickDevinButton") {
       const targetText = request.buttonText;
-      const mainContent = document.querySelector('.prose-main') || document.querySelector('.prose') || document.querySelector('article') || document.querySelector('main');
-      const buttons = Array.from(document.querySelectorAll('button[aria-label]')).filter(btn => {
-        if (mainContent && mainContent.contains(btn)) return false;
-        if (btn.getBoundingClientRect().left > window.innerWidth / 2) return false;
-        return true;
-      });
-      const buttonToClick = buttons.find(
+      const navButtons = getDevinSidebarButtons();
+      const buttonToClick = navButtons.find(
         btn => btn.getAttribute('aria-label').trim() === targetText
       );
       if (buttonToClick) {
         if (DEBUG_MODE) console.log(`Devin: Clicking button for '${targetText}'`);
+
+        const oldUrl = window.location.href;
+        let urlChanged = false;
+
         buttonToClick.click();
+
+        // Polling to detect when SPA has finished rendering the new page
+        let attempts = 0;
+        const checkInterval = setInterval(() => {
+          attempts++;
+          if (!urlChanged && window.location.href !== oldUrl) {
+            urlChanged = true;
+          }
+
+          // We consider the page ready if URL changed AND we find a visible header that matches targetText, 
+          // OR if enough time has passed (fallback 15s)
+          const titleEl = document.querySelector('.container > div:nth-child(1) a[data-selected="true"]') ||
+            document.querySelector(".container > div:nth-child(1) h1") ||
+            document.querySelector("h1");
+
+          const currentTitle = titleEl ? titleEl.textContent.trim() : "";
+
+          if ((urlChanged && currentTitle === targetText) || attempts > 50) {
+            clearInterval(checkInterval);
+            if (DEBUG_MODE) console.log(`Devin: Content ready for '${targetText}'. URL changed: ${urlChanged}`);
+
+            // Add a small breather for final react renders
+            setTimeout(() => {
+              chrome.runtime.sendMessage({ action: "contentScriptReady" });
+            }, 500);
+          }
+        }, 300);
+
         sendResponse({ success: true });
       } else {
         if (DEBUG_MODE) console.error(`Devin: Button for '${targetText}' not found`);
@@ -387,6 +381,46 @@
     // For synchronous actions (like pageLoaded, tabActivated), we already called sendResponse above
     return false;
   });
+
+  // Helper: Get strictly filtered Devin sidebar buttons for extraction and programmatic clicking
+  function getDevinSidebarButtons() {
+    const pathParts = window.location.pathname.split('/');
+    const mainContent = document.querySelector('.prose-main') ||
+      document.querySelector('.prose') ||
+      document.querySelector('article') ||
+      document.querySelector('main');
+
+    const buttons = Array.from(document.querySelectorAll('button[aria-label]'));
+
+    // Extract Org Name from URL for exclusion (e.g. /org/philip-zheng/ -> Philip Zheng)
+    const orgIndex = pathParts.indexOf('org');
+    let orgName = '';
+    if (orgIndex !== -1 && pathParts[orgIndex + 1]) {
+      orgName = pathParts[orgIndex + 1].replace(/-/g, ' ').toLowerCase();
+    }
+
+    // Security & Noise filters: Block potential destructive actions or generic UI elements
+    const exactIgnoredLabels = ['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Back', 'Copy', 'Pin', 'Unpin', 'Delete', 'Remove', 'Archive', 'Reset', 'Clear', 'Sign out'];
+    const partialIgnoredLabels = ['Close sidebar', 'Show more breadcrumbs', 'Add repo', 'New chat', 'Import repository', 'Create new', 'Copy code', 'Link copied!', 'Delete', 'Remove'];
+
+    return buttons.filter(btn => {
+      // 1. Layout checks: Must not be inside main content and must be on the left half of the screen
+      if (mainContent && mainContent.contains(btn)) return false;
+      const rect = btn.getBoundingClientRect();
+      if (rect.left > window.innerWidth / 2) return false;
+
+      // 2. Semantics check: Check aria-label
+      const label = btn.getAttribute('aria-label');
+      if (!label) return false;
+
+      const text = label.trim();
+      if (exactIgnoredLabels.includes(text)) return false;
+      if (partialIgnoredLabels.some(ignored => text.includes(ignored))) return false;
+      if (orgName && text.toLowerCase().includes(orgName)) return false;
+
+      return true;
+    });
+  }
 
   // Helper: Extract lines of text from an element, handling tspans and other children
   function extractLinesFromTextElement(element) {
