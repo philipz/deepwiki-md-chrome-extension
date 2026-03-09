@@ -381,7 +381,15 @@ async function processSinglePage(page) {
     message: `Processing ${currentStep}/${batchState.total}: ${page.title}`
   });
 
-  await navigateToPage(batchState.tabId, page.url);
+  if (page.isDevinButton && page.buttonText) {
+    const clickRes = await sendMessageToTab(batchState.tabId, { action: 'clickDevinButton', buttonText: page.buttonText });
+    if (!clickRes || !clickRes.success) {
+      throw new Error(clickRes?.error || `Failed to click Devin page button for: ${page.title}`);
+    }
+  } else {
+    await navigateToPage(batchState.tabId, page.url);
+  }
+
   if (batchState.cancelRequested) return;
 
   // Wait for dynamic content to render.

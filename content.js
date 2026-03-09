@@ -168,7 +168,17 @@
             const pathParts = window.location.pathname.split('/');
             if (DEBUG_MODE) console.log('Devin: Detecting sidebar links using button[aria-label] logic...');
 
-            const buttons = Array.from(document.querySelectorAll('button[aria-label]'));
+            const mainContent = document.querySelector('.prose-main') ||
+              document.querySelector('.prose') ||
+              document.querySelector('article') ||
+              document.querySelector('main');
+
+            const buttons = Array.from(document.querySelectorAll('button[aria-label]')).filter(btn => {
+              if (mainContent && mainContent.contains(btn)) return false;
+              const rect = btn.getBoundingClientRect();
+              if (rect.left > window.innerWidth / 2) return false;
+              return true;
+            });
 
             // Extract Org Name from URL for exclusion (e.g. /org/philip-zheng/ -> Philip Zheng)
             const orgIndex = pathParts.indexOf('org');
@@ -177,14 +187,14 @@
               orgName = pathParts[orgIndex + 1].replace(/-/g, ' ').toLowerCase();
             }
 
-            const ignoredLabels = ['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Close sidebar', 'Show more breadcrumbs', 'Add repo', 'New chat', 'Import repository', 'Create new', 'Back'];
+            const ignoredLabels = ['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Close sidebar', 'Show more breadcrumbs', 'Add repo', 'New chat', 'Import repository', 'Create new', 'Back', 'Copy', 'Copy code', 'Link copied!', 'Pin', 'Unpin'];
 
             const navButtons = buttons.filter(btn => {
               const label = btn.getAttribute('aria-label');
               if (!label) return false;
-              
+
               const text = label.trim();
-              
+
               if (ignoredLabels.some(ignored => text.includes(ignored))) return false;
               if (orgName && text.toLowerCase().includes(orgName)) return false;
 
@@ -263,7 +273,9 @@
               url: new URL(link.getAttribute('href'), baseUrl).href,
               // Use hierarchical title (1.1 Title) if available, otherwise fallback to text content
               title: link.hierarchicalTitle || link.textContent.trim(),
-              selected: link.getAttribute('data-selected') === 'true'
+              selected: link.getAttribute('data-selected') === 'true',
+              isDevinButton: !!link.text,
+              buttonText: link.text
             };
           });
 
@@ -342,6 +354,26 @@
       if (DEBUG_MODE) console.log("Tab activated:", window.location.href);
       // Acknowledge receipt of message to avoid connection errors
       sendResponse({ received: true });
+    } else if (request.action === "clickDevinButton") {
+      const targetText = request.buttonText;
+      const mainContent = document.querySelector('.prose-main') || document.querySelector('.prose') || document.querySelector('article') || document.querySelector('main');
+      const buttons = Array.from(document.querySelectorAll('button[aria-label]')).filter(btn => {
+        if (mainContent && mainContent.contains(btn)) return false;
+        if (btn.getBoundingClientRect().left > window.innerWidth / 2) return false;
+        return true;
+      });
+      const buttonToClick = buttons.find(
+        btn => btn.getAttribute('aria-label').trim() === targetText
+      );
+      if (buttonToClick) {
+        if (DEBUG_MODE) console.log(`Devin: Clicking button for '${targetText}'`);
+        buttonToClick.click();
+        sendResponse({ success: true });
+      } else {
+        if (DEBUG_MODE) console.error(`Devin: Button for '${targetText}' not found`);
+        sendResponse({ success: false, error: 'Button not found' });
+      }
+      return false; // Synced response
     }
 
     // Only return true for asynchronous actions that will call sendResponse later.
@@ -391,7 +423,15 @@
     if (element.nodeType === Node.TEXT_NODE) {
       // Basic text cleanup
       let text = element.textContent.replace(/\u00A0/g, " "); // Replace non-breaking spaces
-      if (text.trim().length > 0) {
+      const trimmedText = text.trim();
+
+      // Filter out unwanted UI text (like copy buttons)
+      const ignoredTexts = ["copied!", "Copied!", "Link copied!", "Copy", "Copy code"];
+      if (ignoredTexts.includes(trimmedText)) {
+        return "";
+      }
+
+      if (trimmedText.length > 0) {
         return text;
       }
       return "";
@@ -407,6 +447,17 @@
     }
 
     const tagName = element.tagName.toLowerCase();
+
+    // Ignore specific UI elements like buttons and SVGs
+    if (tagName === "button" || tagName === "svg" || tagName === "path") {
+      return "";
+    }
+
+    // Ignore elements hidden via Tailwind classes
+    const classList = Array.from(element.classList || []);
+    if (classList.some(cls => ["sr-only", "opacity-0", "invisible", "hidden"].includes(cls))) {
+      return "";
+    }
 
     // Headers
     if (["h1", "h2", "h3", "h4", "h5", "h6"].includes(tagName)) {
