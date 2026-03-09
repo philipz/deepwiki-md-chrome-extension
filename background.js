@@ -201,6 +201,14 @@ function sendMessageToTab(tabId, message) {
     });
   }
 
+  // If entry exists but is explicitly NOT ready (e.g. markTabPending was called),
+  // we must queue directly to guarantee sequential execution after contentScriptReady.
+  if (entry && !entry.isReady) {
+    return new Promise((resolve, reject) => {
+      queueMessageForTab(tabId, message, resolve, reject);
+    });
+  }
+
   return tryDirect().catch(error => {
     if (!shouldQueueForError(error)) {
       throw error;
