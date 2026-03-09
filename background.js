@@ -173,7 +173,7 @@ function shouldQueueForError(error) {
     error.message.includes('Could not establish connection');
 }
 
-function sendMessageToTab(tabId, message) {
+function sendMessageToTab(tabId, message, forceDirect = false) {
   const entry = messageQueue[tabId];
   const tryDirect = () => attemptDirectMessage(tabId, message);
 
@@ -198,6 +198,14 @@ function sendMessageToTab(tabId, message) {
         });
       }
       throw error;
+    });
+  }
+
+  // If entry exists but is explicitly NOT ready (e.g. markTabPending was called),
+  // we must queue directly to guarantee sequential execution after contentScriptReady.
+  if (entry && !entry.isReady && !forceDirect) {
+    return new Promise((resolve, reject) => {
+      queueMessageForTab(tabId, message, resolve, reject);
     });
   }
 
@@ -381,7 +389,26 @@ async function processSinglePage(page) {
     message: `Processing ${currentStep}/${batchState.total}: ${page.title}`
   });
 
-  await navigateToPage(batchState.tabId, page.url);
+  if (page.isDevinButton && page.buttonText) {
+    // Set pending state BEFORE clicking to prevent race condition with contentScriptReady
+    markTabPending(batchState.tabId);
+
+    // Add buttonIndex to the payload for disambiguation
+    const clickRes = await sendMessageToTab(batchState.tabId, {
+      action: 'clickDevinButton',
+      buttonText: page.buttonText,
+      buttonIndex: page.buttonIndex
+    }, true);
+
+    if (!clickRes || !clickRes.success) {
+      // Revert the pending state on failure so we don't stall the queue forever
+      markTabReady(batchState.tabId);
+      throw new Error(clickRes?.error || `Failed to click Devin page button for: ${page.title}`);
+    }
+  } else {
+    await navigateToPage(batchState.tabId, page.url);
+  }
+
   if (batchState.cancelRequested) return;
 
   // Wait for dynamic content to render.

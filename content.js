@@ -166,212 +166,70 @@
 
           if (hostname.includes('devin.ai')) {
             const pathParts = window.location.pathname.split('/');
-            // Devin AI sidebar logic
-            if (DEBUG_MODE) console.log('Devin: Detecting sidebar links...');
+            if (DEBUG_MODE) console.log('Devin: Detecting sidebar links using helper logic...');
 
-            // Strategy: Devin 2.0 uses buttons for sidebar items, not just UL/LI.
-            // We need to capture these buttons and generate hash links for them.
+            const navButtons = getDevinSidebarButtons();
 
-            let items = [];
-            let isNewDevinStructure = false;
-
-            // 1. Find the sidebar container
-            let sidebarContainer = document.querySelector('div[class*="w-[--sidebar-main-width]"]');
-
-            let existingMenuButtons = sidebarContainer ? Array.from(sidebarContainer.querySelectorAll('div[data-slot="sidebar-menu-button"]')) : [];
-
-            // Fallback for sidebar detection if the class changes
-            if (!sidebarContainer || (sidebarContainer.querySelectorAll('button').length === 0 && existingMenuButtons.length === 0)) {
-              // Try New Devin UI structure (e.g., v2) first by looking at the whole document
-              const menuButtons = Array.from(document.querySelectorAll('div[data-slot="sidebar-menu-button"]'));
-              if (menuButtons.length > 0) {
-                // Use the hierarchy of the first button to find its scrollable parent list wrapper
-                let parent = menuButtons[0].parentElement;
-                let foundSpecificContainer = false;
-                // Go up a few levels to find a good container
-                for (let i = 0; i < 4 && parent; i++) {
-                  if (parent.querySelectorAll('div[data-slot="sidebar-menu-button"]').length > 3) {
-                    foundSpecificContainer = true;
-                    break;
-                  }
-                  parent = parent.parentElement;
-                }
-                sidebarContainer = foundSpecificContainer ? parent : menuButtons[0].parentElement;
-                existingMenuButtons = Array.from(sidebarContainer.querySelectorAll('div[data-slot="sidebar-menu-button"]'));
-              } else {
-                // Try to find any vertical list of buttons on the left side
-                const potentialContainers = Array.from(document.querySelectorAll('div, aside, nav'));
-                const validContainer = potentialContainers.find(div => {
-                  const rect = div.getBoundingClientRect();
-                  // Check if it's on the left side and has decent height
-                  if (rect.left > 100 || rect.width > 400 || rect.height < 300) return false;
-
-                  // Must contain multiple buttons
-                  const btns = div.querySelectorAll('button');
-                  if (btns.length < 3) return false;
-
-                  // Check if buttons look like nav items (text-align left, etc - heuristic)
-                  return true;
-                });
-
-                if (validContainer) {
-                  sidebarContainer = validContainer;
-                  if (DEBUG_MODE) console.log('Devin: Found sidebar via generic left-column heuristic', sidebarContainer);
-                }
-              }
-            }
-
-            // We use `sidebarContainer` to scope our queries to prevent grabbing global buttons.
-            if (sidebarContainer) {
-              if (existingMenuButtons.length > 0) {
-                isNewDevinStructure = true;
-                items = existingMenuButtons;
-                if (DEBUG_MODE) console.log('Devin: Found sidebar via data-slot="sidebar-menu-button" heuristic within container');
-              } else {
-                items = Array.from(sidebarContainer.querySelectorAll('button'));
-              }
-            } else {
-              if (DEBUG_MODE) console.log("Devin: No sidebar container found.");
-            }
-
-            if (items.length > 0) {
-              let counters = [];
-
-              // Helper function to extract text consistently across old/new structures and filters
-              const getItemText = (item, isNewStructure) => {
-                if (isNewStructure) {
-                  const btn = item.querySelector('button');
-                  const span = item.querySelector('span.truncate');
-
-                  // Prioritize visible text in the DOM to avoid accessibility verbosity (e.g. "Navigate to...")
-                  let text = span ? span.textContent.trim() : '';
-
-                  if (!text && btn) {
-                    text = btn.innerText.trim();
-                  }
-
-                  // Only fall back to aria-label if all visible text fails
-                  if (!text && btn) {
-                    text = btn.getAttribute('aria-label') || '';
-                  }
-
-                  return text;
-                }
-                // Always use innerText for consistency, to avoid pulling visually hidden text
-                return item.innerText.trim();
-              };
-
-              // Pre-calculate text for all items to avoid redundant DOM queries during filtering
-              const itemsWithText = items.map(item => ({
-                element: item,
-                text: getItemText(item, isNewDevinStructure)
-              }));
-
-              // Filter items that are likely nav items
-              const navButtons = itemsWithText.filter(itemObj => {
-                const text = itemObj.text;
-
-                // Exclude common non-wiki buttons found in sidebar
-                if (!text) return false;
-                if (['Add repo', 'New chat', 'Import repository', 'Create new'].some(exclude => text.includes(exclude))) return false;
-
-                // Ensure it's not a global nav item that somehow got implemented as a button
-                // (Though inspection showed they are <a> tags, safety first)
-                if (['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Back'].includes(text)) return false;
-
-                return true;
-              });
-
-              // Extract Org Name from URL for exclusion (e.g. /org/philip-zheng/ -> Philip Zheng)
-              const orgIndex = pathParts.indexOf('org');
-              let orgName = '';
-              if (orgIndex !== -1 && pathParts[orgIndex + 1]) {
-                orgName = pathParts[orgIndex + 1].replace(/-/g, ' '); // philip-zheng -> philip zheng
-              }
-
-              // Second pass filter for Org Name / Workspace selector
-              const finalButtons = navButtons.filter(itemObj => {
-                const text = itemObj.text;
-                if (orgName && text.toLowerCase().includes(orgName.toLowerCase())) return false;
-                return true;
-              });
-
-              finalButtons.forEach(itemObj => {
-                const text = itemObj.text;
-                const rect = itemObj.element.getBoundingClientRect();
-
-                // Store raw data for processing
-                counters.push({
-                  element: itemObj.element,
-                  text: text,
-                  left: rect.left
-                });
+            if (navButtons.length > 0) {
+              const counters = navButtons.map((btn, index) => {
+                const rect = btn.getBoundingClientRect();
+                return {
+                  text: btn.getAttribute('aria-label').trim(),
+                  left: rect.left,
+                  element: btn,
+                  index: index
+                };
               });
 
               // Calculate indentation baseline
-              if (counters.length > 0) {
-                const minLeft = Math.min(...counters.map(c => c.left));
-                const INDENT_THRESHOLD = 8;
+              const minLeft = Math.min(...counters.map(c => c.left));
+              const INDENT_THRESHOLD = 8;
+              let hierarchyStack = [0];
 
-                // Support Level 2 pages (Hierarchy) by removing the strict filter
-                // and calculating prefixes (1, 1.1, 1.2, 2...)
-                let hierarchyStack = [0];
+              // Determine Base URL for Wiki
+              const wikiIndex = pathParts.indexOf('wiki');
+              let wikiBaseUrl = window.location.origin;
 
-                // Determine Base URL for Wiki
-                const wikiIndex = pathParts.indexOf('wiki');
-                let wikiBaseUrl = window.location.origin;
-
-                if (wikiIndex !== -1 && pathParts[wikiIndex + 2]) {
-                  // Path structure: /org/[org]/wiki/[user]/[project]
-                  // wikiIndex points to 'wiki'. 
-                  // +1 is [user], +2 is [project].
-                  // We need to capture up to [project].
-                  // slice is exclusive, so +3.
-                  const basePath = pathParts.slice(0, wikiIndex + 3).join('/');
-                  wikiBaseUrl += basePath;
-                }
-
-                sidebarLinks = counters.map((item) => {
-                  // Determine Level based on indentation
-                  const offset = item.left - minLeft;
-                  const level = offset < INDENT_THRESHOLD ? 0 : 1;
-
-                  // Update Hierarchy Stack
-                  if (level > hierarchyStack.length - 1) {
-                    hierarchyStack.push(1);
-                  } else if (level < hierarchyStack.length - 1) {
-                    while (hierarchyStack.length - 1 > level) {
-                      hierarchyStack.pop();
-                    }
-                    hierarchyStack[level]++;
-                  } else {
-                    hierarchyStack[level]++;
-                  }
-
-                  const prefix = hierarchyStack.join('.');
-
-                  // Use Hash-based navigation as this seems to be the pattern for sub-sections
-                  // e.g. .../project#1.1
-                  // This avoids full page reloads and 404s on synthesized paths.
-                  const fullUrl = `${wikiBaseUrl}#${prefix}`;
-
-                  return {
-                    getAttribute: (attr) => (attr === 'href' ? fullUrl : null),
-                    textContent: item.text,
-                    href: fullUrl,
-                    text: item.text,
-                    hierarchicalTitle: `${prefix} ${item.text}`
-                  };
-                });
-
-                if (DEBUG_MODE) {
-                  console.log(`DeepWiki: Found ${sidebarLinks.length} total pages (Level 1 & 2).`);
-                }
+              if (wikiIndex !== -1 && pathParts[wikiIndex + 2]) {
+                const basePath = pathParts.slice(0, wikiIndex + 3).join('/');
+                wikiBaseUrl += basePath;
               }
+
+              sidebarLinks = counters.map((item) => {
+                const offset = item.left - minLeft;
+                const level = offset < INDENT_THRESHOLD ? 0 : 1;
+
+                if (level > hierarchyStack.length - 1) {
+                  hierarchyStack.push(1);
+                } else if (level < hierarchyStack.length - 1) {
+                  while (hierarchyStack.length - 1 > level) {
+                    hierarchyStack.pop();
+                  }
+                  hierarchyStack[level]++;
+                } else {
+                  hierarchyStack[level]++;
+                }
+
+                const prefix = hierarchyStack.join('.');
+                const fullUrl = `${wikiBaseUrl}#${prefix}`;
+
+                return {
+                  getAttribute: (attr) => (attr === 'href' ? fullUrl : null),
+                  textContent: item.text,
+                  href: fullUrl,
+                  text: item.text,
+                  hierarchicalTitle: `${prefix} ${item.text}`,
+                  isDevinButton: true,
+                  buttonIndex: item.index
+                };
+              });
+
+              if (DEBUG_MODE) {
+                console.log(`Devin: Synthesized links found: ${sidebarLinks.length}`);
+              }
+            } else {
+              if (DEBUG_MODE) console.log("Devin: No matching sidebar buttons found.");
             }
-
-            if (DEBUG_MODE) console.log(`Devin: Synthesized links found: ${sidebarLinks.length}`);
-
           } else {
             sidebarLinks = Array.from(document.querySelectorAll('.border-r-border ul li a'));
           }
@@ -387,7 +245,10 @@
               url: new URL(link.getAttribute('href'), baseUrl).href,
               // Use hierarchical title (1.1 Title) if available, otherwise fallback to text content
               title: link.hierarchicalTitle || link.textContent.trim(),
-              selected: link.getAttribute('data-selected') === 'true'
+              selected: link.getAttribute('data-selected') === 'true',
+              isDevinButton: link.isDevinButton === true,
+              buttonText: link.text,
+              buttonIndex: link.buttonIndex
             };
           });
 
@@ -466,6 +327,94 @@
       if (DEBUG_MODE) console.log("Tab activated:", window.location.href);
       // Acknowledge receipt of message to avoid connection errors
       sendResponse({ received: true });
+    } else if (request.action === "clickDevinButton") {
+      const targetText = request.buttonText;
+      const targetIndex = request.buttonIndex; // Use index to disambiguate identical labels
+
+      const navButtons = getDevinSidebarButtons();
+
+      let buttonToClick = null;
+      if (targetIndex !== undefined && targetIndex >= 0 && targetIndex < navButtons.length) {
+        buttonToClick = navButtons[targetIndex];
+      } else {
+        // Fallback to text matching if index is missing or out of bounds
+        buttonToClick = navButtons.find(
+          btn => btn.getAttribute('aria-label').trim() === targetText
+        );
+      }
+
+      if (buttonToClick) {
+        if (DEBUG_MODE) console.log(`Devin: Clicking button for '${targetText}' (Index: ${targetIndex})`);
+
+        // If the button is already selected, we are already on the target page.
+        // Skip the click and the 15-second polling delay to speed up extraction.
+        if (buttonToClick.getAttribute('data-selected') === 'true') {
+          if (DEBUG_MODE) console.log(`Devin: Already on page '${targetText}'. Skipping click.`);
+          setTimeout(() => {
+            chrome.runtime.sendMessage({ action: "contentScriptReady" });
+          }, 100);
+          sendResponse({ success: true });
+          return false;
+        }
+
+        const oldUrl = window.location.href;
+        let urlChanged = false;
+
+        buttonToClick.click();
+
+        // Clear any existing orphaned interval
+        if (window._devinCheckInterval) {
+          clearInterval(window._devinCheckInterval);
+        }
+
+        // Polling to detect when SPA has finished rendering the new page
+        let attempts = 0;
+        window._devinCheckInterval = setInterval(() => {
+          attempts++;
+          if (!urlChanged && window.location.href !== oldUrl) {
+            urlChanged = true;
+          }
+
+          // We consider the page ready if URL changed AND we find a visible header that matches targetText, 
+          // OR if the button itself now has data-selected="true" (faster & more reliable),
+          // OR if enough time has passed (fallback 15s)
+
+          let readinessConfirmed = false;
+
+          // 1. Check if the newly clicked button state changed to selected
+          if (buttonToClick && buttonToClick.getAttribute('data-selected') === 'true') {
+            readinessConfirmed = true;
+          }
+
+          // 2. Fallback check for title element matching
+          if (!readinessConfirmed) {
+            const titleEl = document.querySelector('.container > div:nth-child(1) a[data-selected="true"]') ||
+              document.querySelector(".container > div:nth-child(1) h1") ||
+              document.querySelector("h1");
+            const currentTitle = titleEl ? titleEl.textContent.trim() : "";
+            if (currentTitle === targetText) {
+              readinessConfirmed = true;
+            }
+          }
+
+          if (readinessConfirmed || attempts > 50) {
+            clearInterval(window._devinCheckInterval);
+            window._devinCheckInterval = null;
+            if (DEBUG_MODE) console.log(`Devin: Content ready for '${targetText}'. URL changed: ${urlChanged}. Attempts: ${attempts}`);
+
+            // Add a small breather for final react renders
+            setTimeout(() => {
+              chrome.runtime.sendMessage({ action: "contentScriptReady" });
+            }, 500);
+          }
+        }, 300);
+
+        sendResponse({ success: true });
+      } else {
+        if (DEBUG_MODE) console.error(`Devin: Button for '${targetText}' not found`);
+        sendResponse({ success: false, error: 'Button not found' });
+      }
+      return false; // Synced response
     }
 
     // Only return true for asynchronous actions that will call sendResponse later.
@@ -476,6 +425,46 @@
     // For synchronous actions (like pageLoaded, tabActivated), we already called sendResponse above
     return false;
   });
+
+  // Helper: Get strictly filtered Devin sidebar buttons for extraction and programmatic clicking
+  function getDevinSidebarButtons() {
+    const pathParts = window.location.pathname.split('/');
+    const mainContent = document.querySelector('.prose-main') ||
+      document.querySelector('.prose') ||
+      document.querySelector('article') ||
+      document.querySelector('main');
+
+    const buttons = Array.from(document.querySelectorAll('button[aria-label]'));
+
+    // Extract Org Name from URL for exclusion (e.g. /org/philip-zheng/ -> Philip Zheng)
+    const orgIndex = pathParts.indexOf('org');
+    let orgName = '';
+    if (orgIndex !== -1 && pathParts[orgIndex + 1]) {
+      orgName = pathParts[orgIndex + 1].replace(/-/g, ' ').toLowerCase();
+    }
+
+    // Security & Noise filters: Block potential destructive actions or generic UI elements
+    const exactIgnoredLabels = ['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Back', 'Copy', 'Pin', 'Unpin', 'Delete', 'Remove', 'Archive', 'Reset', 'Clear', 'Sign out'];
+    const partialIgnoredLabels = ['Close sidebar', 'Show more breadcrumbs', 'Add repo', 'New chat', 'Import repository', 'Create new', 'Copy code', 'Link copied!'];
+
+    return buttons.filter(btn => {
+      // 1. Layout checks: Must not be inside main content and must be on the left half of the screen
+      if (mainContent && mainContent.contains(btn)) return false;
+      const rect = btn.getBoundingClientRect();
+      if (rect.left > window.innerWidth / 2) return false;
+
+      // 2. Semantics check: Check aria-label
+      const label = btn.getAttribute('aria-label');
+      if (!label) return false;
+
+      const text = label.trim();
+      if (exactIgnoredLabels.includes(text)) return false;
+      if (partialIgnoredLabels.some(ignored => text.includes(ignored))) return false;
+      if (orgName && text.toLowerCase().includes(orgName)) return false;
+
+      return true;
+    });
+  }
 
   // Helper: Extract lines of text from an element, handling tspans and other children
   function extractLinesFromTextElement(element) {
@@ -515,7 +504,16 @@
     if (element.nodeType === Node.TEXT_NODE) {
       // Basic text cleanup
       let text = element.textContent.replace(/\u00A0/g, " "); // Replace non-breaking spaces
-      if (text.trim().length > 0) {
+      const trimmedText = text.trim();
+
+      // Filter out unwanted UI text (like copy buttons)
+      // Only filter highly specific UI phrases to prevent data loss in legitimate Edge cases
+      const ignoredTexts = ["Link copied!", "Copy code", "Copied!"];
+      if (ignoredTexts.includes(trimmedText)) {
+        return "";
+      }
+
+      if (trimmedText.length > 0) {
         return text;
       }
       return "";
@@ -531,6 +529,17 @@
     }
 
     const tagName = element.tagName.toLowerCase();
+
+    // Ignore specific UI elements like buttons and SVGs
+    if (tagName === "button" || tagName === "svg" || tagName === "path") {
+      return "";
+    }
+
+    // Ignore elements hidden via Tailwind classes
+    const classList = Array.from(element.classList || []);
+    if (classList.some(cls => ["sr-only", "invisible", "hidden"].includes(cls))) {
+      return "";
+    }
 
     // Headers
     if (["h1", "h2", "h3", "h4", "h5", "h6"].includes(tagName)) {
