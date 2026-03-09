@@ -171,12 +171,13 @@
             const navButtons = getDevinSidebarButtons();
 
             if (navButtons.length > 0) {
-              const counters = navButtons.map(btn => {
+              const counters = navButtons.map((btn, index) => {
                 const rect = btn.getBoundingClientRect();
                 return {
                   text: btn.getAttribute('aria-label').trim(),
                   left: rect.left,
-                  element: btn
+                  element: btn,
+                  index: index
                 };
               });
 
@@ -218,7 +219,8 @@
                   href: fullUrl,
                   text: item.text,
                   hierarchicalTitle: `${prefix} ${item.text}`,
-                  isDevinButton: true
+                  isDevinButton: true,
+                  buttonIndex: item.index
                 };
               });
 
@@ -245,7 +247,8 @@
               title: link.hierarchicalTitle || link.textContent.trim(),
               selected: link.getAttribute('data-selected') === 'true',
               isDevinButton: link.isDevinButton === true,
-              buttonText: link.text
+              buttonText: link.text,
+              buttonIndex: link.buttonIndex
             };
           });
 

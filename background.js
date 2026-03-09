@@ -390,12 +390,21 @@ async function processSinglePage(page) {
   });
 
   if (page.isDevinButton && page.buttonText) {
-    const clickRes = await sendMessageToTab(batchState.tabId, { action: 'clickDevinButton', buttonText: page.buttonText });
+    // Set pending state BEFORE clicking to prevent race condition with contentScriptReady
+    markTabPending(batchState.tabId);
+
+    // Add buttonIndex to the payload for disambiguation
+    const clickRes = await sendMessageToTab(batchState.tabId, {
+      action: 'clickDevinButton',
+      buttonText: page.buttonText,
+      buttonIndex: page.buttonIndex
+    });
+
     if (!clickRes || !clickRes.success) {
+      // Revert the pending state on failure so we don't stall the queue forever
+      markTabReady(batchState.tabId);
       throw new Error(clickRes?.error || `Failed to click Devin page button for: ${page.title}`);
     }
-    // Set pending state to queue subsequent messages until the SPA view is ready
-    markTabPending(batchState.tabId);
   } else {
     await navigateToPage(batchState.tabId, page.url);
   }
