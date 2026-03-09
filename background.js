@@ -173,7 +173,7 @@ function shouldQueueForError(error) {
     error.message.includes('Could not establish connection');
 }
 
-function sendMessageToTab(tabId, message) {
+function sendMessageToTab(tabId, message, forceDirect = false) {
   const entry = messageQueue[tabId];
   const tryDirect = () => attemptDirectMessage(tabId, message);
 
@@ -203,7 +203,7 @@ function sendMessageToTab(tabId, message) {
 
   // If entry exists but is explicitly NOT ready (e.g. markTabPending was called),
   // we must queue directly to guarantee sequential execution after contentScriptReady.
-  if (entry && !entry.isReady) {
+  if (entry && !entry.isReady && !forceDirect) {
     return new Promise((resolve, reject) => {
       queueMessageForTab(tabId, message, resolve, reject);
     });
@@ -398,7 +398,7 @@ async function processSinglePage(page) {
       action: 'clickDevinButton',
       buttonText: page.buttonText,
       buttonIndex: page.buttonIndex
-    });
+    }, true);
 
     if (!clickRes || !clickRes.success) {
       // Revert the pending state on failure so we don't stall the queue forever

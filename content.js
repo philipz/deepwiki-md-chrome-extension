@@ -329,12 +329,33 @@
       sendResponse({ received: true });
     } else if (request.action === "clickDevinButton") {
       const targetText = request.buttonText;
+      const targetIndex = request.buttonIndex; // Use index to disambiguate identical labels
+
       const navButtons = getDevinSidebarButtons();
-      const buttonToClick = navButtons.find(
-        btn => btn.getAttribute('aria-label').trim() === targetText
-      );
+
+      let buttonToClick = null;
+      if (targetIndex !== undefined && targetIndex >= 0 && targetIndex < navButtons.length) {
+        buttonToClick = navButtons[targetIndex];
+      } else {
+        // Fallback to text matching if index is missing or out of bounds
+        buttonToClick = navButtons.find(
+          btn => btn.getAttribute('aria-label').trim() === targetText
+        );
+      }
+
       if (buttonToClick) {
-        if (DEBUG_MODE) console.log(`Devin: Clicking button for '${targetText}'`);
+        if (DEBUG_MODE) console.log(`Devin: Clicking button for '${targetText}' (Index: ${targetIndex})`);
+
+        // If the button is already selected, we are already on the target page.
+        // Skip the click and the 15-second polling delay to speed up extraction.
+        if (buttonToClick.getAttribute('data-selected') === 'true') {
+          if (DEBUG_MODE) console.log(`Devin: Already on page '${targetText}'. Skipping click.`);
+          setTimeout(() => {
+            chrome.runtime.sendMessage({ action: "contentScriptReady" });
+          }, 100);
+          sendResponse({ success: true });
+          return false;
+        }
 
         const oldUrl = window.location.href;
         let urlChanged = false;
@@ -350,16 +371,30 @@
           }
 
           // We consider the page ready if URL changed AND we find a visible header that matches targetText, 
+          // OR if the button itself now has data-selected="true" (faster & more reliable),
           // OR if enough time has passed (fallback 15s)
-          const titleEl = document.querySelector('.container > div:nth-child(1) a[data-selected="true"]') ||
-            document.querySelector(".container > div:nth-child(1) h1") ||
-            document.querySelector("h1");
 
-          const currentTitle = titleEl ? titleEl.textContent.trim() : "";
+          let readinessConfirmed = false;
 
-          if ((urlChanged && currentTitle === targetText) || attempts > 50) {
+          // 1. Check if the newly clicked button state changed to selected
+          if (buttonToClick && buttonToClick.getAttribute('data-selected') === 'true') {
+            readinessConfirmed = true;
+          }
+
+          // 2. Fallback check for title element matching
+          if (!readinessConfirmed) {
+            const titleEl = document.querySelector('.container > div:nth-child(1) a[data-selected="true"]') ||
+              document.querySelector(".container > div:nth-child(1) h1") ||
+              document.querySelector("h1");
+            const currentTitle = titleEl ? titleEl.textContent.trim() : "";
+            if (currentTitle === targetText) {
+              readinessConfirmed = true;
+            }
+          }
+
+          if (readinessConfirmed || attempts > 50) {
             clearInterval(checkInterval);
-            if (DEBUG_MODE) console.log(`Devin: Content ready for '${targetText}'. URL changed: ${urlChanged}`);
+            if (DEBUG_MODE) console.log(`Devin: Content ready for '${targetText}'. URL changed: ${urlChanged}. Attempts: ${attempts}`);
 
             // Add a small breather for final react renders
             setTimeout(() => {
