@@ -187,7 +187,8 @@
               orgName = pathParts[orgIndex + 1].replace(/-/g, ' ').toLowerCase();
             }
 
-            const ignoredLabels = ['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Close sidebar', 'Show more breadcrumbs', 'Add repo', 'New chat', 'Import repository', 'Create new', 'Back', 'Copy', 'Copy code', 'Link copied!', 'Pin', 'Unpin'];
+            const exactIgnoredLabels = ['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Back', 'Copy', 'Pin', 'Unpin'];
+            const partialIgnoredLabels = ['Close sidebar', 'Show more breadcrumbs', 'Add repo', 'New chat', 'Import repository', 'Create new', 'Copy code', 'Link copied!'];
 
             const navButtons = buttons.filter(btn => {
               const label = btn.getAttribute('aria-label');
@@ -195,7 +196,8 @@
 
               const text = label.trim();
 
-              if (ignoredLabels.some(ignored => text.includes(ignored))) return false;
+              if (exactIgnoredLabels.includes(text)) return false;
+              if (partialIgnoredLabels.some(ignored => text.includes(ignored))) return false;
               if (orgName && text.toLowerCase().includes(orgName)) return false;
 
               return true;
@@ -248,7 +250,8 @@
                   textContent: item.text,
                   href: fullUrl,
                   text: item.text,
-                  hierarchicalTitle: `${prefix} ${item.text}`
+                  hierarchicalTitle: `${prefix} ${item.text}`,
+                  isDevinButton: true
                 };
               });
 
@@ -274,7 +277,7 @@
               // Use hierarchical title (1.1 Title) if available, otherwise fallback to text content
               title: link.hierarchicalTitle || link.textContent.trim(),
               selected: link.getAttribute('data-selected') === 'true',
-              isDevinButton: !!link.text,
+              isDevinButton: link.isDevinButton === true,
               buttonText: link.text
             };
           });
@@ -426,7 +429,8 @@
       const trimmedText = text.trim();
 
       // Filter out unwanted UI text (like copy buttons)
-      const ignoredTexts = ["copied!", "Copied!", "Link copied!", "Copy", "Copy code"];
+      // Only filter highly specific UI phrases to prevent data loss in legitimate Edge cases
+      const ignoredTexts = ["Link copied!", "Copy code", "Copied!"];
       if (ignoredTexts.includes(trimmedText)) {
         return "";
       }
