@@ -1,0 +1,11 @@
+content.js
+  ai_agent 7
+utils.js
+  ai_agent 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "70f18b9796a6e7e6838b864d65ad9716a947fd21",
+  "prompts": {}
+}
