@@ -1,0 +1,24 @@
+test/sample_cyclic_special.svg
+  s_6102105f283709::t_289291c36a1ea5 1-26
+test/repro_cyclic_special.js
+  s_6102105f283709::t_f88089fca86376 38,40-48
+content.js
+  s_6102105f283709::t_20e4894b25881d 793-797,799
+  s_6102105f283709::t_c7999c8673ba9b 685-694,708-709,715-716,721-727,729,734-735
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "851be90603965da87cba29b1a3d9905ef954e591",
+  "prompts": {},
+  "sessions": {
+    "s_6102105f283709": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6749d85b-6425-4693-b324-4b3fcba439a3",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "philipz <philipzheng@gmail.com>"
+    }
+  }
+}
