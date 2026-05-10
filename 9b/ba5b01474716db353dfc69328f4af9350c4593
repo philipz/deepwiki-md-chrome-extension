@@ -1,0 +1,21 @@
+test/repro_cyclic_special.js
+  s_6102105f283709::t_91e9131530bfb3 1-54
+content.js
+  s_6102105f283709::t_7b6faafe5fb0b6 702-719
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "9bba5b01474716db353dfc69328f4af9350c4593",
+  "prompts": {},
+  "sessions": {
+    "s_6102105f283709": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6749d85b-6425-4693-b324-4b3fcba439a3",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "philipz <philipzheng@gmail.com>"
+    }
+  }
+}
