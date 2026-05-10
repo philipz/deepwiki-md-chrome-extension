@@ -1,0 +1,40 @@
+test/repro_subgraph_parens.js
+  s_6102105f283709::t_3d27764aac730c 1-52
+content.js
+  s_6102105f283709::t_ee24d1579a2173 571-578,581,583-584,593-595
+  s_6102105f283709::t_d91a8064aa58d1 728-730,732-733
+  s_6102105f283709::t_f8ddeb7fcd13e3 985-986,988-1003
+  s_6102105f283709::t_ee32f395f784e9 1228-1238
+  s_6102105f283709::t_97211e2d623a3a 1076-1183,1196
+  s_6102105f283709::t_c3551a1765f90a 1058-1066
+  s_6102105f283709::t_7df7dab3864834 909-915,918-919,921,923
+  s_6102105f283709::t_0ba11af75325bb 929-984,987,1004-1057,1067-1075,1195,1218-1225
+test/repro_class_diagram_ts.js
+  s_6102105f283709::t_c4b3163f60a287 1-47,50,55-63
+  s_6102105f283709::t_a27161f21aa295 48-49,51-54
+test/repro_sequence.js
+  s_6102105f283709::t_0f4e697c638077 1-72
+test/repro_sequence_2.js
+  s_6102105f283709::t_4b8f685610649e 1-89
+test/repro_class_diagram_mixed_ext.js
+  s_6102105f283709::t_77b067d4d9efa2 1-28,31-79
+  s_6102105f283709::t_1e9062b04ce9e5 29-30
+test/repro_state_diagram.js
+  s_6102105f283709::t_b884c37d090594 1-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "29502accab520280a1afc622e21c6c51bf180343",
+  "prompts": {},
+  "sessions": {
+    "s_6102105f283709": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6749d85b-6425-4693-b324-4b3fcba439a3",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "philipz <philipzheng@gmail.com>"
+    }
+  }
+}
