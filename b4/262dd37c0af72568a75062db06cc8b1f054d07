@@ -1,0 +1,19 @@
+background.js
+  s_943e4dd4b720c4::t_c9d6e89adfd4df 289-313,449-455
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "b4262dd37c0af72568a75062db06cc8b1f054d07",
+  "prompts": {},
+  "sessions": {
+    "s_943e4dd4b720c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "633b0915-6925-4bc8-b1d9-d76c1ec5d9e2",
+        "model": "unknown"
+      },
+      "human_author": "philipz <philipzheng@gmail.com>"
+    }
+  }
+}
