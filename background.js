@@ -286,6 +286,31 @@ function sanitizeName(value, fallback = 'page') {
     || fallback;
 }
 
+// Derive the chapter number for a page so ZIP filenames mirror the URL ordering
+// (e.g. .../1-vs-code-architecture-overview -> "1", .../1.1-... -> "1.1").
+// DeepWiki carries the number as the last path segment; Devin carries it in the
+// hash (#1.1) and in page.title ("1.1 Title"). Returns '' when none is found.
+function deriveChapterNumber(page) {
+  const candidates = [];
+  if (page && page.url) {
+    try {
+      const parsed = new URL(page.url);
+      if (parsed.hash) candidates.push(parsed.hash.replace(/^#/, ''));
+      const lastSegment = parsed.pathname.split('/').filter(Boolean).pop();
+      if (lastSegment) candidates.push(lastSegment);
+    } catch (error) {
+      candidates.push(page.url);
+    }
+  }
+  if (page && page.title) candidates.push(page.title);
+
+  for (const candidate of candidates) {
+    const match = /^(\d+(?:\.\d+)*)\b/.exec(candidate);
+    if (match) return match[1];
+  }
+  return '';
+}
+
 function getUniqueFileName(desired) {
   const base = sanitizeName(desired, 'page');
   let candidate = base;
@@ -421,7 +446,13 @@ async function processSinglePage(page) {
     throw new Error(convertResponse?.error || 'Conversion failed');
   }
 
-  const fileName = getUniqueFileName(convertResponse.markdownTitle || page.title);
+  const baseTitle = convertResponse.markdownTitle || page.title;
+  const chapter = deriveChapterNumber(page);
+  // Skip prepending if the title already starts with that number (avoids "1.1-1.1 Title").
+  const alreadyNumbered =
+    chapter && new RegExp(`^${chapter.replace(/\./g, '\\.')}\\b`).test(baseTitle);
+  const desiredName = chapter && !alreadyNumbered ? `${chapter}-${baseTitle}` : baseTitle;
+  const fileName = getUniqueFileName(desiredName);
   batchState.convertedPages.push({ title: fileName, content: convertResponse.markdown });
   batchState.processed += 1;
   broadcastBatchUpdate('pageProcessed', {
