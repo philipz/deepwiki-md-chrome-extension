@@ -37,13 +37,13 @@ Three message endpoints — popup ↔ background ↔ content script — coordina
 
 - `manifest.json` — MV3, host permissions for `deepwiki.com/*` and `app.devin.ai/*`. Permissions: `downloads`, `tabs`, `webNavigation`, `scripting`.
 - `background.js` (service worker) — batch orchestration, per-tab message queue, SPA navigation, ZIP/file generation. Loads `lib/jszip.min.js` and `utils.js` via `importScripts`.
-- `content.js` — DOM → Markdown conversion (`processNode`), sidebar extraction (`extractAllPages`), Devin button clicks (`clickDevinButton`). Wrapped in an IIFE with a version guard (`window.__deepwikiVersion`) so re-injection cleanly supersedes the prior instance.
+- `content.js` — DOM → Markdown conversion (`processNode`), sidebar extraction (`extractAllPages`, `getDevinSidebarLinks`). Wrapped in an IIFE with a version guard (`window.__deepwikiVersion`) so re-injection cleanly supersedes the prior instance.
 - `popup.js` / `popup.html` — UI with three buttons + cancel; defers re-injection to background via `ensureContentScript`.
 - `utils.js` — shared `sanitizeName` and `isValidDeepWikiUrl` (loaded by both background and popup).
 
 ### Key invariants
 
-**Tab readiness queue (`background.js`).** `messageQueue[tabId] = { isReady, queue }` buffers any message destined for a tab whose content script hasn't yet sent `contentScriptReady`. Flushed by `flushMessageQueue` once ready. This is what lets batch processing fire the next `convertToMarkdown` immediately after navigation without racing the freshly re-injected content script. When initiating actions that re-mount the content script (e.g. `clickDevinButton`), the background must call `markTabPending(tabId)` *before* sending and pass `forceDirect=true` to `sendMessageToTab`, otherwise the message would be queued and never delivered.
+**Tab readiness queue (`background.js`).** `messageQueue[tabId] = { isReady, queue }` buffers any message destined for a tab whose content script hasn't yet sent `contentScriptReady`. Flushed by `flushMessageQueue` once ready. This is what lets batch processing fire the next `convertToMarkdown` immediately after navigation without racing the freshly re-injected content script. When initiating an action that re-mounts the content script from inside the page (rather than via `chrome.tabs.update`), the background must call `markTabPending(tabId)` *before* sending and pass `forceDirect=true` to `sendMessageToTab`, otherwise the message would be queued and never delivered.
 
 **Content script readiness signal (`content.js`).** Sends `chrome.runtime.sendMessage({ action: 'contentScriptReady' })` synchronously at IIFE start *and* again on `window load`. Background has a listener registered **before** `chrome.scripting.executeScript` resolves (see `ensureContentScript`) — this avoids a documented race where `executeScript` resolves only after the script body finishes, by which time a synchronous `contentScriptReady` could have already fired.
 
@@ -51,7 +51,9 @@ Three message endpoints — popup ↔ background ↔ content script — coordina
 
 **Version guard for re-injection.** `content.js` increments `window.__deepwikiVersion` and every message handler short-circuits if `window.__deepwikiVersion !== __v`. This is required because reloading the extension (without refreshing the page) leaves stale event listeners from earlier injections.
 
-**Devin sidebar = buttons, not links.** Devin's wiki nav is `<button aria-label>` not `<a href>`. `getDevinSidebarButtons` filters by aria-label (deny-list of destructive actions like `Delete`, `Sign out`, `Reset`) and layout (must be on left half of viewport, outside `.prose-main`). Page identity is tracked by **`buttonIndex`**, not text — duplicate labels are common, and clicking by text would target the wrong page. Already-selected buttons are skipped to bypass the 15s SPA-readiness poll. `data-selected="true"` is the primary "page rendered" signal; an `h1` text match is the fallback.
+**Devin sidebar = real links, matched structurally.** Devin's wiki nav is `li[data-slot="sidebar-menu-item"] > a[href]` pointing at `/org/{org}/wiki/{user}/{project}/page/{chapter}`. `getDevinSidebarLinks` keeps only anchors whose href contains both `/wiki/` and `/page/`; `extractAllPages`'s `filterPrefix` then scopes them to the current project. The `<a>` is an `absolute inset-0` overlay with **no text** — the title comes from `aria-label`. Chapter numbers are **not** derived from indentation; `deriveChapterNumber` reads them straight out of the URL's last path segment (`page/1.1` → `1.1`).
+
+Because these are ordinary links, Devin batches navigate through `navigateToPage` (`chrome.tabs.update`) exactly like DeepWiki — there is no in-page click path. Do **not** reintroduce label deny-list matching over `button[aria-label]`: it silently captured app chrome (`Search`, `Collapse sidebar`, `Help`), and batch mode clicked `Search`, opening Devin's command palette instead of navigating. Regression test: `test/repro_devin_sidebar.js` against `test/fixture_devin_sidebar.html`.
 
 **Content-extraction selectors are site-specific.** DeepWiki uses `.container > div:nth-child(2) .prose`; Devin uses `.prose-main` / `.prose` / `article` / `main`. `convertToMarkdown` retries up to 20× at 500ms intervals if the container has fewer than 50 chars of text — this guards against capturing a half-rendered React tree.
 
@@ -69,7 +71,6 @@ Three message endpoints — popup ↔ background ↔ content script — coordina
 | `contentScriptReady` | cs → bg | — | Fires twice per load (sync + window.load); flushes queue |
 | `convertToMarkdown` | bg/popup → cs | — | Returns `{ success, markdown, markdownTitle, headTitle }` |
 | `extractAllPages` | bg → cs | — | Wrapped in `setTimeout(…, 0)` to force async — callers rely on `return true` keeping the channel open |
-| `clickDevinButton` | bg → cs | `{ buttonText, buttonIndex }` | `buttonIndex` is authoritative; `buttonText` is fallback |
 | `pageLoaded` / `tabActivated` | bg → cs | — | Liveness pings on tab updates; cs must `sendResponse({ received: true })` |
 | `startBatch` / `startBatchSingleFile` / `cancelBatch` / `getBatchStatus` | popup → bg | `{ tabId? }` | |
 | `batchUpdate` | bg → popup | progress payload | Broadcast; popup also calls `getBatchStatus` on open to recover state |

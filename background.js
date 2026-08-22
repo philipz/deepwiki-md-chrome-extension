@@ -414,25 +414,7 @@ async function processSinglePage(page) {
     message: `Processing ${currentStep}/${batchState.total}: ${page.title}`
   });
 
-  if (page.isDevinButton && page.buttonText) {
-    // Set pending state BEFORE clicking to prevent race condition with contentScriptReady
-    markTabPending(batchState.tabId);
-
-    // Add buttonIndex to the payload for disambiguation
-    const clickRes = await sendMessageToTab(batchState.tabId, {
-      action: 'clickDevinButton',
-      buttonText: page.buttonText,
-      buttonIndex: page.buttonIndex
-    }, true);
-
-    if (!clickRes || !clickRes.success) {
-      // Revert the pending state on failure so we don't stall the queue forever
-      markTabReady(batchState.tabId);
-      throw new Error(clickRes?.error || `Failed to click Devin page button for: ${page.title}`);
-    }
-  } else {
-    await navigateToPage(batchState.tabId, page.url);
-  }
+  await navigateToPage(batchState.tabId, page.url);
 
   if (batchState.cancelRequested) return;
 

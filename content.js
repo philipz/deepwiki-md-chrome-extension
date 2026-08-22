@@ -165,70 +165,9 @@
           let sidebarLinks = [];
 
           if (hostname.includes('devin.ai')) {
-            const pathParts = window.location.pathname.split('/');
-            if (DEBUG_MODE) console.log('Devin: Detecting sidebar links using helper logic...');
-
-            const navButtons = getDevinSidebarButtons();
-
-            if (navButtons.length > 0) {
-              const counters = navButtons.map((btn, index) => {
-                const rect = btn.getBoundingClientRect();
-                return {
-                  text: btn.getAttribute('aria-label').trim(),
-                  left: rect.left,
-                  element: btn,
-                  index: index
-                };
-              });
-
-              // Calculate indentation baseline
-              const minLeft = Math.min(...counters.map(c => c.left));
-              const INDENT_THRESHOLD = 8;
-              let hierarchyStack = [0];
-
-              // Determine Base URL for Wiki
-              const wikiIndex = pathParts.indexOf('wiki');
-              let wikiBaseUrl = window.location.origin;
-
-              if (wikiIndex !== -1 && pathParts[wikiIndex + 2]) {
-                const basePath = pathParts.slice(0, wikiIndex + 3).join('/');
-                wikiBaseUrl += basePath;
-              }
-
-              sidebarLinks = counters.map((item) => {
-                const offset = item.left - minLeft;
-                const level = offset < INDENT_THRESHOLD ? 0 : 1;
-
-                if (level > hierarchyStack.length - 1) {
-                  hierarchyStack.push(1);
-                } else if (level < hierarchyStack.length - 1) {
-                  while (hierarchyStack.length - 1 > level) {
-                    hierarchyStack.pop();
-                  }
-                  hierarchyStack[level]++;
-                } else {
-                  hierarchyStack[level]++;
-                }
-
-                const prefix = hierarchyStack.join('.');
-                const fullUrl = `${wikiBaseUrl}#${prefix}`;
-
-                return {
-                  getAttribute: (attr) => (attr === 'href' ? fullUrl : null),
-                  textContent: item.text,
-                  href: fullUrl,
-                  text: item.text,
-                  hierarchicalTitle: `${prefix} ${item.text}`,
-                  isDevinButton: true,
-                  buttonIndex: item.index
-                };
-              });
-
-              if (DEBUG_MODE) {
-                console.log(`Devin: Synthesized links found: ${sidebarLinks.length}`);
-              }
-            } else {
-              if (DEBUG_MODE) console.log("Devin: No matching sidebar buttons found.");
+            sidebarLinks = getDevinSidebarLinks();
+            if (DEBUG_MODE) {
+              console.log(`Devin: Sidebar page links found: ${sidebarLinks.length}`);
             }
           } else {
             sidebarLinks = Array.from(document.querySelectorAll('.border-r-border ul li a'));
@@ -243,12 +182,8 @@
           let pages = sidebarLinks.map(link => {
             return {
               url: new URL(link.getAttribute('href'), baseUrl).href,
-              // Use hierarchical title (1.1 Title) if available, otherwise fallback to text content
-              title: link.hierarchicalTitle || link.textContent.trim(),
-              selected: link.getAttribute('data-selected') === 'true',
-              isDevinButton: link.isDevinButton === true,
-              buttonText: link.text,
-              buttonIndex: link.buttonIndex
+              title: link.textContent.trim(),
+              selected: link.getAttribute('data-selected') === 'true'
             };
           });
 
@@ -332,94 +267,6 @@
       if (DEBUG_MODE) console.log("Tab activated:", window.location.href);
       // Acknowledge receipt of message to avoid connection errors
       sendResponse({ received: true });
-    } else if (request.action === "clickDevinButton") {
-      const targetText = request.buttonText;
-      const targetIndex = request.buttonIndex; // Use index to disambiguate identical labels
-
-      const navButtons = getDevinSidebarButtons();
-
-      let buttonToClick = null;
-      if (targetIndex !== undefined && targetIndex >= 0 && targetIndex < navButtons.length) {
-        buttonToClick = navButtons[targetIndex];
-      } else {
-        // Fallback to text matching if index is missing or out of bounds
-        buttonToClick = navButtons.find(
-          btn => btn.getAttribute('aria-label').trim() === targetText
-        );
-      }
-
-      if (buttonToClick) {
-        if (DEBUG_MODE) console.log(`Devin: Clicking button for '${targetText}' (Index: ${targetIndex})`);
-
-        // If the button is already selected, we are already on the target page.
-        // Skip the click and the 15-second polling delay to speed up extraction.
-        if (buttonToClick.getAttribute('data-selected') === 'true') {
-          if (DEBUG_MODE) console.log(`Devin: Already on page '${targetText}'. Skipping click.`);
-          setTimeout(() => {
-            chrome.runtime.sendMessage({ action: "contentScriptReady" });
-          }, 100);
-          sendResponse({ success: true });
-          return false;
-        }
-
-        const oldUrl = window.location.href;
-        let urlChanged = false;
-
-        buttonToClick.click();
-
-        // Clear any existing orphaned interval
-        if (window._devinCheckInterval) {
-          clearInterval(window._devinCheckInterval);
-        }
-
-        // Polling to detect when SPA has finished rendering the new page
-        let attempts = 0;
-        window._devinCheckInterval = setInterval(() => {
-          attempts++;
-          if (!urlChanged && window.location.href !== oldUrl) {
-            urlChanged = true;
-          }
-
-          // We consider the page ready if URL changed AND we find a visible header that matches targetText, 
-          // OR if the button itself now has data-selected="true" (faster & more reliable),
-          // OR if enough time has passed (fallback 15s)
-
-          let readinessConfirmed = false;
-
-          // 1. Check if the newly clicked button state changed to selected
-          if (buttonToClick && buttonToClick.getAttribute('data-selected') === 'true') {
-            readinessConfirmed = true;
-          }
-
-          // 2. Fallback check for title element matching
-          if (!readinessConfirmed) {
-            const titleEl = document.querySelector('.container > div:nth-child(1) a[data-selected="true"]') ||
-              document.querySelector(".container > div:nth-child(1) h1") ||
-              document.querySelector("h1");
-            const currentTitle = titleEl ? titleEl.textContent.trim() : "";
-            if (currentTitle === targetText) {
-              readinessConfirmed = true;
-            }
-          }
-
-          if (readinessConfirmed || attempts > 50) {
-            clearInterval(window._devinCheckInterval);
-            window._devinCheckInterval = null;
-            if (DEBUG_MODE) console.log(`Devin: Content ready for '${targetText}'. URL changed: ${urlChanged}. Attempts: ${attempts}`);
-
-            // Add a small breather for final react renders
-            setTimeout(() => {
-              chrome.runtime.sendMessage({ action: "contentScriptReady" });
-            }, 500);
-          }
-        }, 300);
-
-        sendResponse({ success: true });
-      } else {
-        if (DEBUG_MODE) console.error(`Devin: Button for '${targetText}' not found`);
-        sendResponse({ success: false, error: 'Button not found' });
-      }
-      return false; // Synced response
     }
 
     // Only return true for asynchronous actions that will call sendResponse later.
@@ -431,44 +278,30 @@
     return false;
   });
 
-  // Helper: Get strictly filtered Devin sidebar buttons for extraction and programmatic clicking
-  function getDevinSidebarButtons() {
-    const pathParts = window.location.pathname.split('/');
-    const mainContent = document.querySelector('.prose-main') ||
-      document.querySelector('.prose') ||
-      document.querySelector('article') ||
-      document.querySelector('main');
+  // Helper: Devin's wiki sidebar is a list of real <a href> links to
+  // /org/{org}/wiki/{user}/{project}/page/{chapter}. Match on that structure rather than
+  // on labels — a deny-list of button labels used to leak app chrome (Search, Help, …).
+  function getDevinSidebarLinks() {
+    const anchors = Array.from(
+      document.querySelectorAll('li[data-slot="sidebar-menu-item"] a[href]')
+    );
 
-    const buttons = Array.from(document.querySelectorAll('button[aria-label]'));
-
-    // Extract Org Name from URL for exclusion (e.g. /org/philip-zheng/ -> Philip Zheng)
-    const orgIndex = pathParts.indexOf('org');
-    let orgName = '';
-    if (orgIndex !== -1 && pathParts[orgIndex + 1]) {
-      orgName = pathParts[orgIndex + 1].replace(/-/g, ' ').toLowerCase();
-    }
-
-    // Security & Noise filters: Block potential destructive actions or generic UI elements
-    const exactIgnoredLabels = ['Sessions', 'Ask', 'Wiki', 'Review', 'Settings', 'Back', 'Copy', 'Pin', 'Unpin', 'Delete', 'Remove', 'Archive', 'Reset', 'Clear', 'Sign out'];
-    const partialIgnoredLabels = ['Close sidebar', 'Show more breadcrumbs', 'Add repo', 'New chat', 'Import repository', 'Create new', 'Copy code', 'Link copied!'];
-
-    return buttons.filter(btn => {
-      // 1. Layout checks: Must not be inside main content and must be on the left half of the screen
-      if (mainContent && mainContent.contains(btn)) return false;
-      const rect = btn.getBoundingClientRect();
-      if (rect.left > window.innerWidth / 2) return false;
-
-      // 2. Semantics check: Check aria-label
-      const label = btn.getAttribute('aria-label');
-      if (!label) return false;
-
-      const text = label.trim();
-      if (exactIgnoredLabels.includes(text)) return false;
-      if (partialIgnoredLabels.some(ignored => text.includes(ignored))) return false;
-      if (orgName && text.toLowerCase().includes(orgName)) return false;
-
-      return true;
-    });
+    return anchors
+      .filter(a => {
+        const href = a.getAttribute('href') || '';
+        return href.includes('/wiki/') && href.includes('/page/');
+      })
+      .map(a => {
+        const href = a.getAttribute('href');
+        // The <a> is an absolutely-positioned overlay with no text; the title lives in aria-label.
+        const label = (a.getAttribute('aria-label') || a.textContent || '').trim();
+        return {
+          getAttribute: attr => (attr === 'href' ? href : a.getAttribute(attr)),
+          textContent: label,
+          href,
+          text: label
+        };
+      });
   }
 
   // === Mermaid flowchart SVG → text conversion ===
