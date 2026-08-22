@@ -1,0 +1,30 @@
+background.js
+  s_5fae3154efefc3::t_670d5162a02836 417
+test/fixture_devin_sidebar.html
+  s_5fae3154efefc3::t_f035977fc0bf6b 1-72
+test/repro_devin_sidebar.js
+  s_5fae3154efefc3::t_8adf71cb2f4bb0 29
+  s_5fae3154efefc3::t_8cf7a7b5af05a8 1-28,30-76
+CLAUDE.md
+  s_5fae3154efefc3::t_b5f5ef4072d244 40,46,54-56
+content.js
+  s_5fae3154efefc3::t_3a729a21fbbb73 168-170
+  s_5fae3154efefc3::t_670d5162a02836 185-186
+  s_5fae3154efefc3::t_a893680f2cbbd6 281-304
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "ed9f5c5a0646c8fe7fa7563a8c3d14579d4f074f",
+  "prompts": {},
+  "sessions": {
+    "s_5fae3154efefc3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2e0e1f22-ca5a-4a87-b27d-9195cfebd67e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "philipz <philipzheng@gmail.com>"
+    }
+  }
+}
